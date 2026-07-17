@@ -183,22 +183,24 @@ curl -s $BASE/product/twin/by-asset/urn:asset:widget-1 -H "Authorization: Bearer
 
 ## Environment variables
 
-At minimum you need `MONGO_URL` and `JWT_SECRET`. The other three are
-validated at startup — the app won't boot without them — but only need to
-be *functionally* correct (a reachable ICID) if you use company creation or
-certificates. Full list with examples: `backend/.env.example`.
+At minimum you need `MONGO_URL` and `JWT_SECRET`. `ICID_SERVICE_BACKEND_URL`
+and `COMPANY_DEFAULT_CODE` are validated at startup — the app won't boot
+without them — but only need to be *functionally* correct (a reachable
+ICID) if you use company creation. `HEDERA_KEY_SECRET` is fully optional:
+leave it unset to run without the certificate feature at all. Full list
+with examples: `backend/.env.example`.
 
 | Variable | Required | Purpose |
 |---|---|---|
 | `MONGO_URL` | Yes | MongoDB connection string |
 | `JWT_SECRET` | Yes | Signs/verifies access + refresh JWTs |
 | `ICID_SERVICE_BACKEND_URL` | Yes* | Base URL of an ICID-compatible instance |
-| `HEDERA_KEY_SECRET` | Yes* | Local AES-256 key encrypting the private key ICID returns |
 | `COMPANY_DEFAULT_CODE` | Yes* | `IFX-COM-NAP` — see [ICID integration](#icid-integration) for why |
+| `HEDERA_KEY_SECRET` | No | Set to enable `/certificate/*` — unset disables those routes entirely, app still boots |
 | `PORT` | No (default `4007`) | HTTP port |
 | `CORS_ORIGIN` | No | Comma-separated allowed browser origins |
 
-<sub>* app refuses to boot without a value set; only needs to actually work if you use company creation / certificates.</sub>
+<sub>* app refuses to boot without a value set; only needs to actually work if you use company creation.</sub>
 
 ## ICID integration
 
@@ -211,6 +213,11 @@ Hedera-backed certificates. Not bundled here — point
 failure), `POST /certificate/create-company-certificate`,
 `POST /certificate/verify-company-certificate`,
 `POST /certificate/verify-all-company-certificate`.
+
+Certificates are optional and controlled entirely by `HEDERA_KEY_SECRET`:
+set it and `/certificate/*` is registered; leave it unset and those routes
+don't exist (`404`, not just unauthenticated/broken) — company creation
+and everything else works either way.
 
 > **Gotcha:** `COMPANY_DEFAULT_CODE` must be `IFX-COM-NAP`. Its last two
 > segments have to match an object-type/subtype pair already seeded in

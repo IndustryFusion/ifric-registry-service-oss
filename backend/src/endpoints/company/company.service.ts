@@ -73,6 +73,7 @@ export class CompanyService {
 
   private readonly icidUrl = envConstants.icidServiceBackendUrl;
   private readonly company_default_code = envConstants.companyDefaultCode;
+  private readonly certificatesEnabled = envConstants.certificatesEnabled;
 
   // ===========================================================================
   // Factory-keyed lookups — start from a factory id
@@ -1089,13 +1090,24 @@ export class CompanyService {
         },
       ]);
 
-      const companyIfricIds = companyData.map(
-        (company) => company.company_ifric_id,
-      );
-      const companiesVerifiedResponse =
-        await this.certificateService.verifyAllCompanyCertificate(
-          companyIfricIds,
-        );
+      // Certificates are optional (see envConstants.certificatesEnabled) —
+      // when disabled, or when ICID is unreachable, company listing should
+      // still work; company_cert just defaults to false instead of failing
+      // the whole request.
+      let companiesVerifiedResponse: Record<string, boolean> = {};
+      if (this.certificatesEnabled) {
+        try {
+          const companyIfricIds = companyData.map(
+            (company) => company.company_ifric_id,
+          );
+          companiesVerifiedResponse =
+            await this.certificateService.verifyAllCompanyCertificate(
+              companyIfricIds,
+            );
+        } catch {
+          companiesVerifiedResponse = {};
+        }
+      }
       return companyData.map((company) => {
         company.company_cert =
           companiesVerifiedResponse[company.company_ifric_id] ?? false;

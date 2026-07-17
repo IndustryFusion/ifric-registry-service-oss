@@ -23,6 +23,12 @@ export class CertificateService {
   private readonly ENCRYPTION_SECRET = envConstants.hederaKeySecret;
 
   encryptPrivateKey(privateKeyStr: string): string {
+    if (!this.ENCRYPTION_SECRET) {
+      throw new HttpException(
+        'Certificates are not configured on this instance (HEDERA_KEY_SECRET not set)',
+        HttpStatus.NOT_IMPLEMENTED,
+      );
+    }
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv(
       'aes-256-cbc',
@@ -35,6 +41,12 @@ export class CertificateService {
   }
 
   decryptPrivateKey(encryptedStr: string): string {
+    if (!this.ENCRYPTION_SECRET) {
+      throw new HttpException(
+        'Certificates are not configured on this instance (HEDERA_KEY_SECRET not set)',
+        HttpStatus.NOT_IMPLEMENTED,
+      );
+    }
     const [ivHex, encryptedHex] = encryptedStr.split(':');
     const iv = Buffer.from(ivHex, 'hex');
     const encryptedText = Buffer.from(encryptedHex, 'hex');

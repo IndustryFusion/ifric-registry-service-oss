@@ -8,6 +8,7 @@ import {
   CompanyUserSchema,
 } from 'src/schemas/company_user.schema';
 import { Certificate, CertificateSchema } from 'src/schemas/certificate.schema';
+import { envConstants } from 'src/common/env.constants';
 
 @Module({
   imports: [
@@ -17,7 +18,10 @@ import { Certificate, CertificateSchema } from 'src/schemas/certificate.schema';
       { name: Certificate.name, schema: CertificateSchema },
     ]),
   ],
-  controllers: [CertificateController],
+  // /certificate/* only exists when HEDERA_KEY_SECRET is set — CompanyModule
+  // still needs CertificateService itself (see CompanyService.getAllCompanies),
+  // so only the controller (the HTTP surface) is conditional, not the provider.
+  controllers: envConstants.certificatesEnabled ? [CertificateController] : [],
   providers: [CertificateService],
   exports: [CertificateService],
 })

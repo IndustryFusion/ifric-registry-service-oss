@@ -27,6 +27,7 @@ describe('CompanyService', () => {
     find: jest.Mock;
     findOne: jest.Mock;
     findOneAndUpdate: jest.Mock;
+    aggregate: jest.Mock;
   } & jest.Mock;
   let factoryModel: {
     find: jest.Mock;
@@ -43,12 +44,16 @@ describe('CompanyService', () => {
   let companyProductModel: jest.Mock;
   let accessGroupModel: { insertMany: jest.Mock };
   let connection: { startSession: jest.Mock };
+  let certificateService: { verifyAllCompanyCertificate: jest.Mock };
 
   beforeEach(async () => {
     companyModel = jest.fn() as any;
     companyModel.find = jest.fn();
     companyModel.findOne = jest.fn();
     companyModel.findOneAndUpdate = jest.fn();
+    companyModel.aggregate = jest.fn();
+
+    certificateService = { verifyAllCompanyCertificate: jest.fn() };
 
     factoryModel = jest.fn() as any;
     factoryModel.find = jest.fn();
@@ -113,7 +118,7 @@ describe('CompanyService', () => {
           useValue: accessGroupModel,
         },
         { provide: getModelToken(UserProductAccessGroup.name), useValue: {} },
-        { provide: CertificateService, useValue: {} },
+        { provide: CertificateService, useValue: certificateService },
         { provide: JwtService, useValue: {} },
         { provide: getConnectionToken(), useValue: connection },
       ],
@@ -431,6 +436,56 @@ describe('CompanyService', () => {
       expect(companyProductModel).not.toHaveBeenCalledWith(
         expect.objectContaining({ product_id: expect.anything() }),
       );
+    });
+  });
+
+  describe('getAllCompanies', () => {
+    const aggregateResult = [{ company_ifric_id: 'urn:ifric:company-1' }];
+
+    beforeEach(() => {
+      companyModel.aggregate.mockResolvedValue(aggregateResult);
+    });
+
+    it('skips the certificate check entirely when certificates are disabled', async () => {
+      (service as any).certificatesEnabled = false;
+
+      const result = await service.getAllCompanies();
+
+      expect(
+        certificateService.verifyAllCompanyCertificate,
+      ).not.toHaveBeenCalled();
+      expect(result).toEqual([
+        { company_ifric_id: 'urn:ifric:company-1', company_cert: false },
+      ]);
+    });
+
+    it('sets company_cert from the verification response when certificates are enabled and succeed', async () => {
+      (service as any).certificatesEnabled = true;
+      certificateService.verifyAllCompanyCertificate.mockResolvedValue({
+        'urn:ifric:company-1': true,
+      });
+
+      const result = await service.getAllCompanies();
+
+      expect(
+        certificateService.verifyAllCompanyCertificate,
+      ).toHaveBeenCalledWith(['urn:ifric:company-1']);
+      expect(result).toEqual([
+        { company_ifric_id: 'urn:ifric:company-1', company_cert: true },
+      ]);
+    });
+
+    it('degrades to company_cert: false instead of throwing when certificates are enabled but the call fails', async () => {
+      (service as any).certificatesEnabled = true;
+      certificateService.verifyAllCompanyCertificate.mockRejectedValue(
+        new Error('ICID unreachable'),
+      );
+
+      const result = await service.getAllCompanies();
+
+      expect(result).toEqual([
+        { company_ifric_id: 'urn:ifric:company-1', company_cert: false },
+      ]);
     });
   });
 });

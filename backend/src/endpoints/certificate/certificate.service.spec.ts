@@ -61,4 +61,24 @@ describe('CertificateService', () => {
       ).rejects.toThrow(HttpException);
     });
   });
+
+  describe('when certificates are not configured (HEDERA_KEY_SECRET unset)', () => {
+    beforeEach(() => {
+      // ENCRYPTION_SECRET is captured from envConstants at construction —
+      // override it directly to simulate an instance booted without
+      // HEDERA_KEY_SECRET, matching how CertificateModule would still
+      // provide CertificateService (just with no HTTP surface) in that case.
+      (service as any).ENCRYPTION_SECRET = undefined;
+    });
+
+    it('encryptPrivateKey throws a clean, explicit error instead of crashing', () => {
+      expect(() => service.encryptPrivateKey('some-private-key')).toThrow(
+        HttpException,
+      );
+    });
+
+    it('decryptPrivateKey throws a clean, explicit error instead of crashing', () => {
+      expect(() => service.decryptPrivateKey('aa:bb')).toThrow(HttpException);
+    });
+  });
 });
