@@ -108,74 +108,6 @@ sequenceDiagram
     App-->>You: owner ≠ manufacturer, factory resolved ✓
 ```
 
-<details>
-<summary><strong>Full copy-pasteable curl walkthrough</strong></summary>
-
-```bash
-BASE=http://localhost:4007
-
-# 1. Seed RBAC templates + company-category taxonomy (once, on a fresh DB)
-curl -s -X POST $BASE/script
-
-# 2. Create a manufacturer company
-curl -s -X POST $BASE/company/create-company -H 'Content-Type: application/json' -d '{
-  "industry": "Manufacturing", "company_name": "Acme Manufacturing Co",
-  "registration_number": "REG-1001", "address_1": "123 Main St", "city": "Berlin",
-  "country": "Germany", "zip": "10115", "admin_name": "Admin Person", "position": "CEO",
-  "email": "admin@acme-mfg.example", "password": "unused", "company_size": "10-50",
-  "company_category": "manufacturer", "meta_data": {}, "company_domain": "acme-mfg.example",
-  "newsLetter": false, "company_logo": "", "company_image": ""
-}'
-# -> { "company_ifric_id": "urn:ifric:...", "temporaryPassword": "..." } — save both.
-
-# 3. Create a second company to act as owner (same shape, different
-#    email/company_name/company_category, e.g. "factory_owner")
-
-# 4. Log in as the manufacturer's admin
-curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' -d '{
-  "email": "admin@acme-mfg.example",
-  "password": "<temporaryPassword from step 2>",
-  "product_name": "Example Product A"
-}'
-TOKEN="<access_token from the response>"
-
-# 5. Create a factory, tagged to the owner company
-curl -s -X POST $BASE/company/factories -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{
-  "factory_id": "urn:ifric:fac-1",
-  "owner_company_ifric_id": "<owner company_ifric_id from step 3>",
-  "location_name": "Plant 1", "city": "Munich", "country": "Germany"
-}'
-
-# 6. Query the factory back
-curl -s $BASE/company/factories/urn:ifric:fac-1 -H "Authorization: Bearer $TOKEN"
-curl -s $BASE/company/factories/urn:ifric:fac-1/owner -H "Authorization: Bearer $TOKEN"
-
-# 7. Tag an external product to the manufacturer (no pre-seeding required)
-curl -s -X POST $BASE/product/company-product -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{
-  "company_ifric_id": "<manufacturer company_ifric_id from step 2>",
-  "product_ifric_id": "urn:product:alpha-machine-001",
-  "billing_id": "BILL-1"
-}'
-curl -s $BASE/product/company/<manufacturer company_ifric_id> -H "Authorization: Bearer $TOKEN"
-
-# 8. Create a digital twin — manufacturer and owner are DISTINCT companies,
-#    located at the factory from step 5
-curl -s -X POST $BASE/product/twin -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{
-  "manufacturer_ifric_id": "<manufacturer company_ifric_id from step 2>",
-  "owner_company_ifric_id": "<owner company_ifric_id from step 3>",
-  "asset_ifric_id": "urn:asset:widget-1",
-  "factory_id": "urn:ifric:fac-1"
-}'
-
-# 9. Query the twin back — owner resolves to the OWNER (not the
-#    manufacturer), and the factory resolves to the real factory
-curl -s $BASE/product/urn:asset:widget-1/owner -H "Authorization: Bearer $TOKEN"
-curl -s $BASE/product/urn:asset:widget-1/factory-location -H "Authorization: Bearer $TOKEN"
-curl -s $BASE/product/twin/by-asset/urn:asset:widget-1 -H "Authorization: Bearer $TOKEN"
-```
-
-</details>
-
 **Good to know:** deleting a factory still referenced by a twin is blocked
 (`409`) — detach the twin first. `POST /company/company-asset` needs a
 `type: "asset" | "gateway" | "server"` field alongside the matching
@@ -218,37 +150,6 @@ Certificates are optional and controlled entirely by `HEDERA_KEY_SECRET`:
 set it and `/certificate/*` is registered; leave it unset and those routes
 don't exist (`404`, not just unauthenticated/broken) — company creation
 and everything else works either way.
-
-> **Gotcha:** `COMPANY_DEFAULT_CODE` must be `IFX-COM-NAP`. Its last two
-> segments have to match an object-type/subtype pair already seeded in
-> ICID, and the object-type segment is compared **case-sensitively**. An
-> older default (`ifx-eur-com`) doesn't match and ICID rejects it with
-> `404`.
-
-<details>
-<summary>Verified against a real, unmodified ICID instance — details</summary>
-
-This integration was tested end to end against ICID built straight from
-its own Dockerfile (`backend/Dockerfile` in the ICID repo), no source
-changes made.
-
-- ICID's own `POST /script` seeds `object_type_code: "COM"` with
-  `object_sub_type_code: "NAP"` for companies — that's where `IFX-COM-NAP`
-  comes from (see ICID's `endpoints/script/script.service.ts`).
-- ICID also needs `IFRIC_NAMESPACE` (any valid UUID, used as a `uuidv5`
-  namespace) set on **its own** container to boot.
-- ICID's Dockerfile fetches secrets from HashiCorp Vault on startup unless
-  you pass `-e ENV=prod`, in which case it reads env vars directly instead
-  — that's how it was run here, since no Vault instance was available.
-  This is a runtime flag, not a code change.
-- Certificate endpoints (on both services) were **not** part of this
-  verification and need additional setup (Hedera network access, ICID's
-  certificate-signing dependencies) beyond what's covered here.
-- Negative paths were also verified: a duplicate registration number is
-  rejected by ICID itself and correctly surfaces as `409` through this
-  service.
-
-</details>
 
 ## Running with Docker
 
@@ -328,22 +229,6 @@ npm run test:e2e  # e2e tests (currently boilerplate)
 npm run lint
 npm run build
 ```
-
-<details>
-<summary>Design notes</summary>
-
-- Each domain has its own NestJS module registering only the Mongoose
-  models it needs; `AppModule` wires them together plus the flat
-  `ScriptController`/`ScriptService`.
-- `AuthGuard` is stateless (JWT signature + `type` claim only, no DB
-  access) — exported once from `AuthModule`, reused everywhere.
-- Passwords are bcrypt-hashed, never stored or returned in reversible form.
-- `CompanyProduct`/`UserProductAccessGroup` store a plain
-  `product_ifric_id` string rather than a foreign key into a local
-  catalog — product data lives in an external system, this service only
-  stores the tag (same pattern as `CompanyTwin.asset_ifric_id`).
-
-</details>
 
 ## License
 

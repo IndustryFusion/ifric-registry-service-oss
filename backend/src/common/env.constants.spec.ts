@@ -1,3 +1,19 @@
+//
+// Copyright (c) 2026 IndustryFusion Europe UG
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 // This file re-requires env.constants.ts fresh (via jest.resetModules()) to
 // exercise its module-load-time env var checks under different process.env
 // values in the same test run — that needs require(), not a static import.
