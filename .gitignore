@@ -1,0 +1,3 @@
+# Claude Code session/tooling artifacts — local only, not part of the project.
+.claude/
+.lavish/
