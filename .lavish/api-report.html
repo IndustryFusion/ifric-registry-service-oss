@@ -1,0 +1,628 @@
+<title>ifric-registry-service — API &amp; Integration Report</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex, .layout-grid, .layout-flex) > *,
+  :where([style*="display: grid"], [style*="display:grid"], [style*="display: flex"], [style*="display:flex"]) > * {
+    min-width: 0;
+  }
+  :where(p, h1, h2, h3, h4, h5, h6, li, dd, blockquote, figcaption, td, th, .badge, .label) {
+    overflow-wrap: anywhere;
+  }
+  :where(img, svg, video, canvas, iframe) { max-width: 100%; height: auto; }
+  html { scroll-behavior: smooth; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .path-cell { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8125rem; word-break: break-all; }
+  .section-anchor { scroll-margin-top: 5.5rem; }
+  .mermaid { display: flex; justify-content: center; }
+</style>
+
+<html data-theme="business">
+<body class="bg-base-200 text-base-content min-h-screen">
+
+<div class="navbar bg-base-100/95 backdrop-blur border-b border-base-300 sticky top-0 z-40 px-4 lg:px-8">
+  <div class="navbar-start">
+    <span class="font-bold text-lg tracking-tight">ifric-registry-service</span>
+    <span class="badge badge-primary badge-soft ml-2 hidden sm:inline-flex">API Report</span>
+  </div>
+  <div class="navbar-end hidden lg:flex gap-1 text-sm">
+    <a href="#overview" class="btn btn-ghost btn-sm">Overview</a>
+    <a href="#architecture" class="btn btn-ghost btn-sm">Architecture</a>
+    <a href="#integrations" class="btn btn-ghost btn-sm">Integrations</a>
+    <a href="#endpoints" class="btn btn-ghost btn-sm">Endpoints</a>
+    <a href="#security" class="btn btn-ghost btn-sm">Auth &amp; Security</a>
+    <a href="#schemas" class="btn btn-ghost btn-sm">Data Model</a>
+  </div>
+</div>
+
+<main class="max-w-6xl mx-auto p-4 lg:p-10 flex flex-col gap-16">
+
+  <!-- OVERVIEW -->
+  <section id="overview" class="section-anchor flex flex-col gap-6">
+    <div class="hero bg-gradient-to-br from-primary/15 via-base-100 to-base-100 rounded-box border border-base-300">
+      <div class="hero-content flex-col text-center py-10 px-4 max-w-4xl mx-auto">
+        <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold leading-tight break-words">ifric-registry-service <span class="text-primary">API Surface Report</span></h1>
+        <p class="max-w-2xl text-base-content/70 mt-2">
+          A multi-tenant registry for companies, users, RBAC, physical/IoT assets, and digital twins —
+          NestJS + MongoDB. This report inventories every HTTP endpoint across 6 controllers and every
+          point where the service calls out to the external ICID service.
+        </p>
+      </div>
+    </div>
+
+    <div class="stats stats-vertical sm:stats-horizontal shadow border border-base-300 bg-base-100 w-full">
+      <div class="stat place-items-center">
+        <div class="stat-title">Controllers</div>
+        <div class="stat-value text-primary">6</div>
+        <div class="stat-desc">App, Script, Auth, Company, Certificate, Product</div>
+      </div>
+      <div class="stat place-items-center">
+        <div class="stat-title">Total endpoints</div>
+        <div class="stat-value">87</div>
+        <div class="stat-desc">across all controllers</div>
+      </div>
+      <div class="stat place-items-center">
+        <div class="stat-title">Unauthenticated</div>
+        <div class="stat-value text-warning">15</div>
+        <div class="stat-desc">no AuthGuard — 17% of routes</div>
+      </div>
+      <div class="stat place-items-center">
+        <div class="stat-title">External integrations</div>
+        <div class="stat-value text-secondary">5</div>
+        <div class="stat-desc">all to the ICID service</div>
+      </div>
+    </div>
+
+    <div role="alert" class="alert alert-warning alert-soft">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>
+      <div class="leading-relaxed">
+        <span class="font-semibold">Notable finding:</span> <code class="mono">ScriptController</code> (<code class="mono">/script</code>, <code class="mono">/script/create-product</code>) declares
+        <code class="mono">@ApiBearerAuth</code> in Swagger but has no <code class="mono">@UseGuards(AuthGuard)</code> anywhere in the file —
+        both seed-data endpoints are reachable with no token at runtime. CLAUDE.md flags this directly: "don't leave it reachable after initial setup in a real deployment."
+        See <a href="#security" class="link link-warning">Auth &amp; Security</a> for the full open-route list.
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="architecture" class="section-anchor flex flex-col gap-4">
+    <h2 class="text-2xl font-bold flex items-center gap-2"><span class="badge badge-primary badge-lg">1</span>Module Architecture</h2>
+    <p class="text-base-content/70">Each domain module registers only the Mongoose models it needs — there is no shared "models" module. <code class="mono">CompanyModule</code> imports <code class="mono">AuthModule</code> purely for the guard, and <code class="mono">CertificateModule</code> for certificate issuance. Two modules reach out to the external ICID service.</p>
+    <div class="card bg-base-100 border border-base-300">
+      <div class="card-body">
+        <pre class="mermaid">
+flowchart TD
+    Client(["Client / Swagger UI"])
+
+    subgraph AppMod["AppModule (root)"]
+        AppC["AppController<br/>GET /"]
+        ScriptC["ScriptController /script<br/>&#9888; no AuthGuard"]
+    end
+
+    subgraph AuthMod["AuthModule /auth"]
+        Guard["AuthGuard<br/>(stateless JWT verify)"]
+    end
+
+    subgraph CompanyMod["CompanyModule /company"]
+        CompanySvc["CompanyService"]
+    end
+
+    subgraph ProductMod["ProductModule /product"]
+        ProductSvc["ProductService"]
+    end
+
+    subgraph CertMod["CertificateModule /certificate"]
+        CertSvc["CertificateService"]
+    end
+
+    ICID[("External: ICID Service<br/>company + certificate + Hedera")]
+    Mongo[("MongoDB")]
+
+    Client --> AppC
+    Client --> ScriptC
+    Client --> AuthMod
+    Client --> CompanyMod
+    Client --> ProductMod
+    Client --> CertMod
+
+    CompanyMod -- "imports (guard only)" --> AuthMod
+    CompanyMod -- imports --> CertMod
+    CompanySvc -- "axios POST /company<br/>axios DELETE /company/:id (rollback)" --> ICID
+    CertSvc -- "axios POST .../certificate/*" --> ICID
+
+    AuthMod --- Mongo
+    CompanyMod --- Mongo
+    ProductMod --- Mongo
+    CertMod --- Mongo
+    AppMod --- Mongo
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- INTEGRATIONS -->
+  <section id="integrations" class="section-anchor flex flex-col gap-6">
+    <h2 class="text-2xl font-bold flex items-center gap-2"><span class="badge badge-primary badge-lg">2</span>External Integration Points</h2>
+    <p class="text-base-content/70">
+      Only <code class="mono">company.service.ts</code> and <code class="mono">certificate.service.ts</code> make outbound HTTP calls — both via raw <code class="mono">axios</code>, both against
+      <code class="mono">process.env.ICID_SERVICE_BACKEND_URL</code>. ICID is a separate open-source service (not bundled in this repo) that mints company IDs and issues/verifies Hedera-anchored certificates.
+      No other module talks to an external service.
+    </p>
+
+    <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Caller</th>
+            <th>Verb</th>
+            <th>External URL</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-ghost">CompanyService.createCompany</span></td>
+            <td><span class="badge badge-success badge-soft">POST</span></td>
+            <td class="path-cell">{ICID_SERVICE_BACKEND_URL}/company</td>
+            <td>Mints a new company IFRIC URN id from dataspace/object/region/country codes; the returned <code class="mono">urn_id</code> becomes <code class="mono">company_ifric_id</code>.</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-ghost">CompanyService.createCompany</span> <span class="badge badge-xs badge-warning badge-soft">rollback</span></td>
+            <td><span class="badge badge-error badge-soft">DELETE</span></td>
+            <td class="path-cell">{ICID_SERVICE_BACKEND_URL}/company/:temp_icid_company_id</td>
+            <td>Compensating action if local company creation fails after the ID was already minted — a saga-style rollback so ICID and Mongo don't drift out of sync.</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-ghost">CertificateService.generateCompanyCertificate</span></td>
+            <td><span class="badge badge-success badge-soft">POST</span></td>
+            <td class="path-cell">{ICID_SERVICE_BACKEND_URL}/certificate/create-company-certificate</td>
+            <td>Mints a certificate/DID/Hedera key pair for a company; the private key is AES-256-CBC encrypted locally (keyed by <code class="mono">HEDERA_KEY_SECRET</code>) before being stored.</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-ghost">CertificateService.verifyCompanyCertificate</span></td>
+            <td><span class="badge badge-success badge-soft">POST</span></td>
+            <td class="path-cell">{ICID_SERVICE_BACKEND_URL}/certificate/verify-company-certificate</td>
+            <td>Checks whether one company's Hedera-anchored certificate is revoked.</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-ghost">CertificateService.verifyAllCompanyCertificate</span></td>
+            <td><span class="badge badge-success badge-soft">POST</span></td>
+            <td class="path-cell">{ICID_SERVICE_BACKEND_URL}/certificate/verify-all-company-certificate</td>
+            <td>Batch verification (50 at a time); called internally by <code class="mono">CompanyService.getAllCompanies()</code> to annotate <code class="mono">GET /company/get-all-companies</code> results with a live <code class="mono">company_cert</code> flag.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="card bg-base-100 border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-base">Company creation saga</h3>
+          <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant CC as CompanyController
+    participant CS as CompanyService
+    participant ICID as ICID Service (external)
+    participant DB as MongoDB
+
+    C->>CC: POST /company/create-company
+    CC->>CS: createCompany(dto)
+    CS->>ICID: POST /company (mint IFRIC id)
+    ICID-->>CS: urn_id
+    CS->>DB: create Company, admin CompanyUser,<br/>default AccessGroups, CompanyProducts
+    alt local write fails
+        CS->>ICID: DELETE /company/:id (rollback)
+        CS-->>CC: throw error
+    else success
+        CS-->>CC: created company
+    end
+    CC-->>C: 201 Created
+          </pre>
+        </div>
+      </div>
+      <div class="card bg-base-100 border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-base">Certificate issuance &amp; verification</h3>
+          <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant CTC as CertificateController
+    participant CTS as CertificateService
+    participant ICID as ICID Service (external)
+    participant DB as MongoDB
+
+    C->>CTC: POST /certificate/create-company-certificate
+    CTC->>CTS: generateCompanyCertificate(dto)
+    CTS->>ICID: POST .../create-company-certificate
+    ICID-->>CTS: keyPair, did, fileId, accountId
+    CTS->>CTS: AES-256-CBC encrypt private key
+    CTS->>DB: save Certificate record
+    CTS-->>C: certificate metadata
+    Note over C,ICID: Later, on demand
+    C->>CTC: POST /certificate/verify-company-certificate
+    CTC->>ICID: POST .../verify-company-certificate
+    ICID-->>CTC: revoked: true / false
+          </pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ENDPOINTS -->
+  <section id="endpoints" class="section-anchor flex flex-col gap-4">
+    <h2 class="text-2xl font-bold flex items-center gap-2"><span class="badge badge-primary badge-lg">3</span>Endpoint Catalog</h2>
+    <p class="text-base-content/70">Grouped by controller. <span class="badge badge-success badge-soft badge-sm">Auth</span> = <code class="mono">AuthGuard</code> applied (stateless bearer-JWT check). <span class="badge badge-error badge-soft badge-sm">Open</span> = reachable with no token. Click a controller to expand.</p>
+
+    <!-- AppController -->
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300">
+      <input type="checkbox" checked />
+      <div class="collapse-title font-semibold flex items-center gap-2">
+        AppController <span class="badge badge-ghost">/</span> <span class="text-base-content/50 font-normal text-sm">1 route</span>
+      </div>
+      <div class="collapse-content">
+        <div class="overflow-x-auto rounded-box border border-base-300">
+          <table class="table table-zebra">
+            <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Health / hello-world root endpoint.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ScriptController -->
+    <div class="collapse collapse-arrow bg-base-100 border border-warning/40">
+      <input type="checkbox" />
+      <div class="collapse-title font-semibold flex items-center gap-2">
+        ScriptController <span class="badge badge-ghost">/script</span> <span class="text-base-content/50 font-normal text-sm">2 routes</span> <span class="badge badge-warning badge-soft badge-sm">no module, no guard</span>
+      </div>
+      <div class="collapse-content">
+        <p class="text-sm text-base-content/60 mb-2">Registered directly on <code class="mono">AppModule</code> (no dedicated <code class="mono">ScriptModule</code>). One-time seed bootstrap for a fresh database.</p>
+        <div class="overflow-x-auto rounded-box border border-base-300">
+          <table class="table table-zebra">
+            <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">/script</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Seeds default RBAC access-group templates + company-category taxonomy.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">/script/create-product</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Seeds example products into the product catalog.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- AuthController -->
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300">
+      <input type="checkbox" />
+      <div class="collapse-title font-semibold flex items-center gap-2">
+        AuthController <span class="badge badge-ghost">/auth</span> <span class="text-base-content/50 font-normal text-sm">23 routes · 8 open</span>
+      </div>
+      <div class="collapse-content">
+        <div class="overflow-x-auto rounded-box border border-base-300">
+          <table class="table table-zebra table-sm">
+            <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">create-user/:admin_mail</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Creates a company user under an admin's company, with product access.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">login</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Authenticates credentials, issues access + refresh JWTs.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">get-indexed-db-data</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns client-side IndexedDB seed data for a user/product/company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/authenticate-token/:token</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Validates a JWT string and returns its payload/validity.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-users/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists users belonging to a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-users-access/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists users + product access grants for a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-profile-content/:company_ifric_id/:user_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns profile content for a specific company user.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-product-access/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns a user's product access-group grants by user id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-details</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Looks up a user by email + company_ifric_id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">get-total-users</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns total count of company users.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-details/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Fetches user by Mongo id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-details-by-email/:email</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Fetches user by email.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-details-by-email-recover-password/:email</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Same lookup as above, unauthenticated — used by the password-recovery flow.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-user-specific-product-access</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns a user's access grant for one specific product.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">check-company-admin/:email</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Checks whether the email belongs to a company admin.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">/update-password</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Changes a password after verifying the old one.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">/update-user-access-group/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Grants named access-group roles per product to a user.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">/update-company-user</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Updates user profile fields and/or password.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-company-user/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes a company user.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">logout</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Clears the stored refresh token (only place revocation is enforced).</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">refresh</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Exchanges a refresh token for a new 1h access token.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">recover-password-request</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Generates and returns a temporary password (no email is sent).</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">recover-password</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Sets a new password using a temporary password.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- CompanyController -->
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300">
+      <input type="checkbox" />
+      <div class="collapse-title font-semibold flex items-center gap-2">
+        CompanyController <span class="badge badge-ghost">/company</span> <span class="text-base-content/50 font-normal text-sm">36 routes · 4 open</span>
+      </div>
+      <div class="collapse-content">
+        <div class="overflow-x-auto rounded-box border border-base-300">
+          <table class="table table-zebra table-sm">
+            <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">factories</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists all factories, optionally filtered by owner company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">factories/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets factory details by id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">factories/:id/owner</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Resolves a factory id to its owning company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">factories/:id/products</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists product URNs located at a factory.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">company-asset</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Creates a physical company asset/gateway/server record.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">create-access-group/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Creates an RBAC access group for a company.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">create-company</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Public signup: mints IFRIC id via ICID, creates admin user, default products &amp; access groups.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">add-status-detail</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Sets a company's verification status (new/verify/verified/unverified).</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-assets/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists physical assets for a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-assets-by-asset/:assetId</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Looks up assets by asset id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-asset-by-assetid/:asset_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Looks up a single asset by its IFRIC asset id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-access-group/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists access groups for a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-access-group-by-group-name/:company_id/:group_name</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets a specific named access group for a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-access-group/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets an access group by its own id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-category-specific-company/:categoryName</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists companies belonging to a category.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-details/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets company details by company_ifric_id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-details-id/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets company details by Mongo _id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-contact-details/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns company contact/admin info.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/companies/check</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Checks for an existing company by name + registration number (pre-signup dedupe).</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-details-by-email/:email</td><td><span class="badge badge-error badge-soft badge-sm">Open</span></td><td>Gets company by admin email.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-details-by-name/:company_name</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets company by name.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-company-and-user-details/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Combined company + user profile lookup.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-all-companies</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists all companies enriched with a live certificate-verification flag <span class="badge badge-secondary badge-soft badge-xs">calls ICID</span>.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">/get-all-owner-companies/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists distinct owner companies related to a manufacturer.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">get-company-category/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets the category of a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">get-manufacturer-companies/:count</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists N manufacturer-category companies.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">get-searched-manufacturer-companies/:searched_text</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Text-searches manufacturer companies.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">get-manufacturer-owner-companies</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists companies that are both manufacturer and owner category.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">/update-company/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Updates a company's profile fields.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">/update-access-group/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Updates an access group's CRUD permission flags.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-company/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes a company.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-access-group/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes an access group.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-company-asset/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes a single company asset.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-bulk-company-assets</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Bulk-deletes company assets.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-company-gateway/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes a company gateway.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">/delete-company-server/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes a company server.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- CertificateController -->
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300">
+      <input type="checkbox" />
+      <div class="collapse-title font-semibold flex items-center gap-2">
+        CertificateController <span class="badge badge-ghost">/certificate</span> <span class="text-base-content/50 font-normal text-sm">5 routes · all guarded</span>
+      </div>
+      <div class="collapse-content">
+        <div class="overflow-x-auto rounded-box border border-base-300">
+          <table class="table table-zebra table-sm">
+            <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">create-company-certificate</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Requests a new certificate/DID from ICID and stores it (encrypted) locally <span class="badge badge-secondary badge-soft badge-xs">calls ICID</span>.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">verify-company-certificate</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Checks whether a company's latest certificate is valid/revoked <span class="badge badge-secondary badge-soft badge-xs">calls ICID</span>.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">get-company-certificate/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Returns stored certificate records for a company (local Mongo only).</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">reveal-private-key/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Decrypts and returns the certificate's stored private key once.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">delete-private-key/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Purges the stored (encrypted) private key from the certificate record.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ProductController -->
+    <div class="collapse collapse-arrow bg-base-100 border border-base-300">
+      <input type="checkbox" />
+      <div class="collapse-title font-semibold flex items-center gap-2">
+        ProductController <span class="badge badge-ghost">/product</span> <span class="text-base-content/50 font-normal text-sm">20 routes · all guarded</span>
+      </div>
+      <div class="collapse-content">
+        <div class="overflow-x-auto rounded-box border border-base-300">
+          <table class="table table-zebra table-sm">
+            <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Resolves a product URN to its manufacturer company via CompanyTwin.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">:id/owner</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Resolves a product URN to its owner company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">:id/factory-location</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Resolves a product URN to its factory location.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">company-product</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Links a product to a company (with billing id).</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">company/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists products linked to a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">:id/name</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets a product's name by id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">by-name/:product_name/id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Finds a product id by name.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">company-product/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Re-links a company-product by name; grants read-only access to existing users.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">company-product/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Removes a company-product link.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">twin</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Creates a digital twin linking an asset URN to manufacturer/owner/factory.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">twin/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets a twin by id.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">twin/by-asset/:asset_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Gets a twin by asset id.</td></tr>
+              <tr><td><span class="badge badge-success badge-soft">POST</span></td><td class="path-cell">twin/count</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Counts twins for a list of asset ids.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">twin/count/:company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Counts twins for a company.</td></tr>
+              <tr><td><span class="badge badge-warning badge-soft">PATCH</span></td><td class="path-cell">twin</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Updates a digital twin.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">twin/bulk</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Bulk-deletes twins.</td></tr>
+              <tr><td><span class="badge badge-error badge-soft">DELETE</span></td><td class="path-cell">twin/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Deletes a single twin.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">manufacturer-assets/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists twin assets manufactured by a company.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">manufacturer-owner-assets/:manufacturer_company_ifric_id/:owner_company_ifric_id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists twin assets by manufacturer + owner pair.</td></tr>
+              <tr><td><span class="badge badge-info badge-soft">GET</span></td><td class="path-cell">owner-assets/:id</td><td><span class="badge badge-success badge-soft badge-sm">Auth</span></td><td>Lists twin assets owned by a company.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECURITY -->
+  <section id="security" class="section-anchor flex flex-col gap-4">
+    <h2 class="text-2xl font-bold flex items-center gap-2"><span class="badge badge-primary badge-lg">4</span>Auth Model &amp; Security Notes</h2>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="card bg-base-100 border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-base">Token model</h3>
+          <ul class="list">
+            <li class="list-row px-0">
+              <div>
+                <div class="font-semibold">access_token <span class="badge badge-sm badge-info badge-soft ml-1">1 hour</span></div>
+                <div class="text-sm text-base-content/60">Stateless. <code class="mono">AuthGuard</code> checks signature + <code class="mono">type</code> claim only — no DB round trip. Stays valid for its full lifetime even after logout.</div>
+              </div>
+            </li>
+            <li class="list-row px-0">
+              <div>
+                <div class="font-semibold">refresh_token <span class="badge badge-sm badge-secondary badge-soft ml-1">30 days</span></div>
+                <div class="text-sm text-base-content/60">Stored server-side on <code class="mono">CompanyUser.jwt_token</code>. Exchanged via <code class="mono">POST /auth/refresh</code>. <code class="mono">/auth/logout</code> clears it — the only point where revocation is actually enforced.</div>
+              </div>
+            </li>
+          </ul>
+          <p class="text-sm text-base-content/60 mt-2">A token minted for one purpose (<code class="mono">type: 'access'</code> vs <code class="mono">'refresh'</code>) is rejected if used for the other. Passwords are bcrypt-hashed, never stored or returned in reversible form.</p>
+        </div>
+      </div>
+
+      <div class="card bg-base-100 border border-error/30">
+        <div class="card-body">
+          <h3 class="card-title text-base text-error">Routes reachable with no token (15)</h3>
+          <div class="overflow-x-auto max-h-80 overflow-y-auto rounded-box border border-base-300">
+            <table class="table table-zebra table-xs">
+              <thead><tr><th>Controller</th><th>Path</th></tr></thead>
+              <tbody>
+                <tr><td>App</td><td class="path-cell">GET /</td></tr>
+                <tr><td>Script</td><td class="path-cell">POST /script</td></tr>
+                <tr><td>Script</td><td class="path-cell">POST /script/create-product</td></tr>
+                <tr><td>Auth</td><td class="path-cell">POST login</td></tr>
+                <tr><td>Auth</td><td class="path-cell">GET authenticate-token/:token</td></tr>
+                <tr><td>Auth</td><td class="path-cell">GET get-user-details-by-email-recover-password/:email</td></tr>
+                <tr><td>Auth</td><td class="path-cell">PATCH update-password</td></tr>
+                <tr><td>Auth</td><td class="path-cell">POST logout</td></tr>
+                <tr><td>Auth</td><td class="path-cell">POST refresh</td></tr>
+                <tr><td>Auth</td><td class="path-cell">POST recover-password-request</td></tr>
+                <tr><td>Auth</td><td class="path-cell">POST recover-password</td></tr>
+                <tr><td>Company</td><td class="path-cell">POST create-company</td></tr>
+                <tr><td>Company</td><td class="path-cell">POST add-status-detail</td></tr>
+                <tr><td>Company</td><td class="path-cell">GET companies/check</td></tr>
+                <tr><td>Company</td><td class="path-cell">GET get-company-details-by-email/:email</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="text-sm text-base-content/60 mt-2">Most of these are intentionally public (signup, login, password recovery). The exceptions worth a second look are the two <code class="mono">ScriptController</code> seed routes — they mint RBAC/category/product data and their Swagger docs claim bearer auth is required, but no guard actually enforces it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCHEMAS -->
+  <section id="schemas" class="section-anchor flex flex-col gap-4">
+    <h2 class="text-2xl font-bold flex items-center gap-2"><span class="badge badge-primary badge-lg">5</span>Data Model (MongoDB / Mongoose)</h2>
+    <p class="text-base-content/70">Core schemas live in <code class="mono">backend/src/schemas/</code>. <code class="mono">Company</code> is the tenant root.</p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">Company</div><div class="text-xs text-base-content/60">Tenant root: profile, credentials, IFRIC id, category, status.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyUser</div><div class="text-xs text-base-content/60">End-user account under a company (credentials, profile).</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">AccessGroup</div><div class="text-xs text-base-content/60">RBAC group per company with create/read/update/delete flags.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">UserProductAccessGroup</div><div class="text-xs text-base-content/60">Join: grants a CompanyUser an AccessGroup role on a Product.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">Certificate</div><div class="text-xs text-base-content/60">Expiry, encrypted private key, Hedera DID/file/account ids.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">Product</div><div class="text-xs text-base-content/60">Product catalog entry (name).</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyProduct</div><div class="text-xs text-base-content/60">Join: links a Product to a Company (with billing id).</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyTwin</div><div class="text-xs text-base-content/60">Digital twin linking an asset/product URN to manufacturer, owner, factory.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyAsset</div><div class="text-xs text-base-content/60">Physical asset owned by a company.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyGateWay</div><div class="text-xs text-base-content/60">Physical IoT gateway device belonging to a company.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyServer</div><div class="text-xs text-base-content/60">Physical server asset belonging to a company.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">Factory</div><div class="text-xs text-base-content/60">Physical factory/location record owned by a company.</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyCategory</div><div class="text-xs text-base-content/60">Taxonomy of company categories (manufacturer, owner, retailer…).</div></div></div>
+      <div class="card bg-base-100 border border-base-300"><div class="card-body p-4"><div class="font-semibold text-sm">CompanyCategoryMapping</div><div class="text-xs text-base-content/60">Join table linking a Company to a CompanyCategory.</div></div></div>
+    </div>
+
+    <div class="alert bg-base-100 border border-base-300 mt-2">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0 stroke-info" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <div class="text-sm">
+        Global setup (<code class="mono">app.module.ts</code>): <code class="mono">JwtModule</code> is registered globally with no default TTL — every token-minting call site sets its own expiry.
+        A global in-memory <code class="mono">CacheModule</code> (600s TTL) wraps every GET via <code class="mono">CacheInterceptor</code>, skipping <code class="mono">token</code>/<code class="mono">refresh_token</code>/<code class="mono">grant_type</code> keys.
+        <code class="mono">ScheduleModule</code> is imported but no <code class="mono">@Cron</code>/<code class="mono">@Interval</code> jobs exist yet — wired up, unused.
+      </div>
+    </div>
+  </section>
+
+  <footer class="text-center text-xs text-base-content/40 pb-8">
+    Generated from the current working tree of <code class="mono">ifric-registry-service-oss</code> · counts reflect controller source at report time
+  </footer>
+
+</main>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const paint = document.createElement("canvas").getContext("2d");
+  function toRgba(color) {
+    paint.clearRect(0, 0, 1, 1);
+    paint.fillStyle = "#000";
+    paint.fillStyle = color;
+    paint.fillRect(0, 0, 1, 1);
+    return paint.getImageData(0, 0, 1, 1).data;
+  }
+  function compositeRgba(foreground, background) {
+    const foregroundAlpha = foreground[3] / 255;
+    const backgroundAlpha = background[3] / 255;
+    const alpha = foregroundAlpha + backgroundAlpha * (1 - foregroundAlpha);
+    if (alpha === 0) return [0, 0, 0, 0];
+    return [
+      (foreground[0] * foregroundAlpha + background[0] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      (foreground[1] * foregroundAlpha + background[1] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      (foreground[2] * foregroundAlpha + background[2] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      alpha * 255,
+    ];
+  }
+  function pageIsDark() {
+    const root = document.documentElement;
+    const rootBackground = toRgba(getComputedStyle(root).backgroundColor);
+    const bodyBackground = document.body ? toRgba(getComputedStyle(document.body).backgroundColor) : [0, 0, 0, 0];
+    const [r, g, b, a] = compositeRgba(bodyBackground, rootBackground);
+    if (a > 0) {
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+    }
+    const colorScheme = getComputedStyle(root).colorScheme;
+    if (colorScheme.includes("dark") && !colorScheme.includes("light")) return true;
+    if (colorScheme.includes("light") && !colorScheme.includes("dark")) return false;
+    return darkQuery.matches;
+  }
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  let applied;
+  let rendering = false;
+  let queued = false;
+  function queueRender() {
+    queued = true;
+    if (rendering) return;
+    void render();
+  }
+  async function render() {
+    rendering = true;
+    try {
+      while (queued) {
+        queued = false;
+        const theme = pageIsDark() ? "dark" : "default";
+        if (theme === applied) continue;
+        mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
+        for (const { el, src } of diagrams) {
+          el.removeAttribute("data-processed");
+          el.textContent = src;
+        }
+        try {
+          await mermaid.run({ nodes: diagrams.map((d) => d.el) });
+        } catch (error) {
+          console.error("Mermaid diagram render failed:", error);
+          return;
+        }
+        applied = theme;
+      }
+    } finally {
+      rendering = false;
+      if (queued) queueRender();
+    }
+  }
+  if (document.readyState === "complete") queueRender();
+  else window.addEventListener("load", queueRender, { once: true });
+  const themeObserver = new MutationObserver(queueRender);
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    themeObserver.observe(el, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
+  }
+  document.addEventListener("change", queueRender, true);
+  document.addEventListener("transitionend", ({ propertyName }) => { if (propertyName === "background-color") queueRender(); }, true);
+  darkQuery.addEventListener("change", queueRender);
+</script>
+
+</body>
+</html>

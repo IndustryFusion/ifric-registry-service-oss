@@ -1,0 +1,62 @@
+services:
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: initiates the single-node replica set on first start (idempotent
+  # — safe to leave in place across restarts). CompanyService.createCompany
+  # uses a MongoDB transaction (session.withTransaction), which only works
+  # against a replica set member, not a standalone mongod — this is required,
+  # not optional, for company creation to work through this compose file.
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        mongosh --host mongo:27017 --quiet --eval '
+          try {
+            rs.status();
+            print("replica set already initiated");
+          } catch (e) {
+            rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]});
+            print("replica set initiated");
+          }
+        '
+
+  ifric-registry-backend:
+    build:
+      context: ./backend
+      # Some Docker daemons (notably CI/sandboxed environments) restrict
+      # outbound network access on the default bridge network used during a
+      # build, which makes `npm install` hang. Building with the host
+      # network sidesteps that; it has no effect on how the container runs
+      # afterward (ports/networking below are unaffected).
+      network: host
+    ports:
+      - "4007:4007"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Overrides whatever MONGO_URL is in backend/.env — the compose
+      # topology (service name "mongo", replica set "rs0") is fixed by this
+      # file, not something each user should have to hand-edit into .env.
+      - MONGO_URL=mongodb://mongo:27017/ifric-registry-service?replicaSet=rs0
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+volumes:
+  mongo_data:

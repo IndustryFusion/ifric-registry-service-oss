@@ -1,0 +1,120 @@
+#
+# Full-stack compose: MongoDB + a real ICID instance + this registry service,
+# all wired together. This is a superset of docker-compose.yaml — use that
+# one instead if you don't need company creation or certificates and don't
+# want to build ICID's image.
+#
+# Quick start:
+#   docker compose -f docker-compose.full.yaml up --build
+#   curl -X POST http://localhost:4010/script   # seed ICID's taxonomy (once)
+#   curl -X POST http://localhost:4007/script   # seed this service's RBAC/categories (once)
+#
+# See README.md "Verified against a real ICID instance" and "Running the
+# full stack with ICID" for details, including why COMPANY_DEFAULT_CODE must
+# be exactly IFX-COM-NAP and what to do if your Docker daemon blocks
+# build-time network access.
+#
+services:
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_full_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: initiates the single-node replica set on first start (idempotent
+  # — safe to leave in place across restarts). This service's own
+  # createCompany uses a MongoDB transaction, which requires a replica set;
+  # ICID doesn't use transactions but shares the same Mongo without issue.
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        mongosh --host mongo:27017 --quiet --eval '
+          try {
+            rs.status();
+            print("replica set already initiated");
+          } catch (e) {
+            rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]});
+            print("replica set initiated");
+          }
+        '
+
+  # ICID mints company_ifric_id and issues/verifies certificates — a separate
+  # open-source service (https://github.com/IndustryFusion/icidservice), not
+  # vendored into this repo. Built directly from its own repo/Dockerfile via
+  # a git build context, with NO source changes.
+  #
+  # Only /company and /script are exercised by this stack. Hedera and
+  # certificate-signing dependencies (HBAR_URL, ASSET_VC_TOPIC_ID,
+  # CERTIFICATE_PATH, KEY_PATH) are deliberately left unset — those endpoints
+  # exist on ICID but are intentionally not wired up here; calling them will
+  # fail, which is expected.
+  icid:
+    build:
+      context: https://github.com/IndustryFusion/icidservice.git#main:backend
+      # Some Docker daemons (notably CI/sandboxed environments) restrict
+      # outbound network access on the default bridge network used during a
+      # build, which makes `npm install` hang. Building with the host
+      # network sidesteps that; it has no effect on how the container runs
+      # afterward (ports/networking below are unaffected).
+      network: host
+    ports:
+      - "4010:4010"
+    environment:
+      - MONGO_URL=mongodb://mongo:27017/icid-service?replicaSet=rs0
+      - CORS_ORIGIN=http://localhost:4007
+      # UUID namespace ICID uses to derive ids (uuidv5) — any valid UUID
+      # works, it's a seed value, not a secret. Override via a .env file
+      # next to this compose file if you want a different one.
+      - IFRIC_NAMESPACE=${IFRIC_NAMESPACE:-1b671a64-40d5-491e-99b0-da01ff1f3341}
+      # Skips ICID's Vault-secrets-fetch entrypoint script
+      # (fetch_env_from_vault.sh) so it boots straight from the env vars
+      # above instead of requiring a running Vault instance.
+      - ENV=prod
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:4010/api-docs-json"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+  ifric-registry-backend:
+    build:
+      context: ./backend
+      network: host
+    ports:
+      - "4007:4007"
+    environment:
+      - MONGO_URL=mongodb://mongo:27017/ifric-registry-service?replicaSet=rs0
+      - PORT=4007
+      - CORS_ORIGIN=http://localhost:3000
+      - JWT_SECRET=${JWT_SECRET:-dev-only-jwt-secret-change-me}
+      - ICID_SERVICE_BACKEND_URL=http://icid:4010
+      - HEDERA_KEY_SECRET=${HEDERA_KEY_SECRET:-dev-only-hedera-key-32-bytes-min}
+      # Must match an object-type/subtype pair already seeded in ICID (its
+      # own POST /script seeds object_type "COM" with subtype "NAP" for
+      # companies, case-sensitive) — see README "Verified against a real
+      # ICID instance" for how this was confirmed.
+      - COMPANY_DEFAULT_CODE=IFX-COM-NAP
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      icid:
+        condition: service_healthy
+
+volumes:
+  mongo_full_data:
