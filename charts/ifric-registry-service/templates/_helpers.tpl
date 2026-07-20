@@ -55,10 +55,38 @@ either a user-supplied existing Secret, or the one this chart creates.
 
 {{/*
 In-cluster Postgres Service host (matches the postgres StatefulSet's
-Service name — see templates/postgres/service.yaml).
+Service name — see templates/postgres/service.yaml). Only meaningful when
+.Values.postgres.enabled is true — use postgresHostResolved/
+postgresPortResolved below for the host/port the app should actually use.
 */}}
 {{- define "ifric-registry-service.postgresHost" -}}
 {{- printf "%s-postgres" (include "ifric-registry-service.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Resolved Postgres host: the bundled in-cluster StatefulSet's Service when
+postgres.enabled=true (default), else postgres.external.host. Every
+template that needs to reach Postgres (configmap, backend/keycloak
+wait-for-postgres initContainers, keycloak's KC_DB_URL) should use this
+instead of postgresHost directly, so bundled and external both work.
+*/}}
+{{- define "ifric-registry-service.postgresHostResolved" -}}
+{{- if .Values.postgres.enabled -}}
+{{- include "ifric-registry-service.postgresHost" . -}}
+{{- else -}}
+{{- required "postgres.external.host is required when postgres.enabled=false — point it at a real PostgreSQL instance, or set postgres.enabled=true to bundle one" .Values.postgres.external.host -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Resolved Postgres port — see postgresHostResolved.
+*/}}
+{{- define "ifric-registry-service.postgresPortResolved" -}}
+{{- if .Values.postgres.enabled -}}
+{{- .Values.postgres.service.port -}}
+{{- else -}}
+{{- .Values.postgres.external.port -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -1,8 +1,10 @@
-{{- if .Values.icid.enabled }}
+{{- if and .Values.icid.enabled .Values.icid.mongodb.enabled }}
 # ICID's own required database — unrelated to this service's PostgreSQL.
 # Runs unauthenticated as a single-node replica set, matching
 # docker-compose.full.yaml's `mongo` service exactly (ICID is run
-# unmodified, so its connection expectations can't be changed here).
+# unmodified, so its connection expectations can't be changed here). Only
+# rendered when icid.mongodb.enabled=true (default) — set it false to
+# point ICID at an external MongoDB via icid.mongodb.external.url instead.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

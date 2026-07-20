@@ -13,22 +13,52 @@ and certificates. Two profiles, mirroring the root Compose files:
 ```mermaid
 flowchart LR
     Backend["Backend Pod<br/>(this app)"]
-    KC["Keycloak Pod"]
-    PG[("Postgres<br/>StatefulSet")]
-    ICID["ICID Pod<br/>(icid.enabled only)"]
-    Mongo[("ICID MongoDB<br/>StatefulSet<br/>(icid.enabled only)")]
+    KC["Keycloak Pod<br/>(bundled or external)"]
+    PG[("Postgres<br/>bundled or external")]
+    ICID["ICID Pod<br/>(icid.enabled only,<br/>or external)"]
+    Mongo[("ICID MongoDB<br/>bundled or external,<br/>icid.enabled only")]
 
     Backend -- "wait-for-postgres + migrate<br/>initContainers" --> PG
     Backend -- "login / tokens / user mgmt" --> KC
-    Backend -. "company creation / certs<br/>(icid.enabled, or an external URL)" .-> ICID
+    Backend -. "company creation / certs" .-> ICID
     KC -- "wait-for-postgres<br/>initContainer, KC_DB=postgres" --> PG
-    ICID -- "wait-for-mongo + init-replicaset<br/>initContainers" --> Mongo
+    ICID -- "wait-for-mongo + init-replicaset<br/>initContainers (bundled only)" --> Mongo
 ```
 
 Postgres is shared by the backend and Keycloak (separate tables, no
-collision). ICID and its MongoDB only exist when `icid.enabled: true`
-(the full profile) — otherwise `env.icidServiceBackendUrl` points at an
-external instance instead.
+collision).
+
+## Topology — bundled or external, independently
+
+Every backing service can be either deployed by this chart or pointed at
+one you already run — pick per component:
+
+| Component | Bundled (default) | External |
+|---|---|---|
+| PostgreSQL | `postgres.enabled=true` | `postgres.enabled=false` + `postgres.external.host`/`.port` |
+| Keycloak | `keycloak.enabled=true` | `keycloak.enabled=false` + `env.keycloak.url`/`.realm` |
+| ICID | `icid.enabled=true` (`values-full.yaml`) | `icid.enabled=false` (default) + `env.icidServiceBackendUrl` |
+| ICID's MongoDB | `icid.mongodb.enabled=true` (default, only when ICID is bundled) | `icid.mongodb.enabled=false` + `icid.mongodb.external.url` |
+
+These combine freely — e.g. bundled Keycloak + external Postgres +
+external ICID, or external Keycloak + bundled Postgres + bundled ICID with
+its own external MongoDB. A fully-external install (everything above set
+to external) deploys just the backend Pod and nothing else.
+
+```bash
+# Example: external Postgres, bundled Keycloak, external ICID
+helm install my-registry charts/ifric-registry-service \
+  --set image.repository=<your-registry>/ifric-registry-service --set image.tag=<tag> \
+  --set postgres.enabled=false --set postgres.external.host=my-pg.example.com \
+  --set env.icidServiceBackendUrl=https://your-real-icid.example.com
+
+# Example: full profile, but ICID's MongoDB is your own external replica set
+helm install my-registry charts/ifric-registry-service \
+  -f charts/ifric-registry-service/values.yaml -f charts/ifric-registry-service/values-full.yaml \
+  --set image.repository=<your-registry>/ifric-registry-service --set image.tag=<tag> \
+  --set icid.mongodb.enabled=false \
+  --set icid.mongodb.external.url="mongodb://my-mongo.example.com:27017/icid-service?replicaSet=rs0"
+```
 
 ## Install
 
@@ -41,7 +71,8 @@ docker build -t <your-registry>/ifric-registry-service:<tag> .
 docker push <your-registry>/ifric-registry-service:<tag>
 ```
 
-**2. Install the chart** — pick one:
+**2. Install the chart** — pick a profile (see [Topology](#topology-bundled-or-external-independently)
+above for external-Postgres/external-Mongo variants):
 
 ```bash
 # Default profile — needs a real, external ICID instance
@@ -58,7 +89,9 @@ helm install my-registry charts/ifric-registry-service \
   --set image.tag=<tag>
 ```
 
-This succeeds, but the backend Pod **crash-loops** until step 3 is done.
+This succeeds, but the backend Pod **crash-loops** until step 3 is done
+(unless you set `keycloak.enabled=false` with an already-configured
+external Keycloak, in which case skip to step 5).
 
 **3. Configure Keycloak** (bundled, comes up empty — one-time manual step):
 
@@ -96,21 +129,17 @@ kubectl port-forward svc/my-registry-ifric-registry-service-backend 4007:4007
 curl http://localhost:4007/api-docs
 ```
 
-To point at a fully external Keycloak instead of the bundled one, set
-`keycloak.enabled=false` plus `env.keycloak.url`/`env.keycloak.realm` at
-install time and skip step 3.
-
 ## Reference
 
 **Secrets** (all in one Kubernetes `Secret`):
 
 | Value | Default | Notes |
 |---|---|---|
-| `secrets.keycloakAdminPassword` | auto-generated | Keycloak admin console login; reused across upgrades |
+| `secrets.keycloakAdminPassword` | auto-generated | Keycloak admin console login; reused across upgrades. Only relevant with the bundled Keycloak. |
 | `secrets.keycloakClientSecret` | `""` | From step 3.2 above |
 | `secrets.keycloakAdminClientSecret` | `""` | From step 3.3 above |
 | `secrets.hederaKeySecret` | `""` | Optional — unset disables `/certificate/*` |
-| `postgres.auth.password` | `ifric` | Changing it post-install doesn't rotate it inside an already-initialized Postgres volume |
+| `postgres.auth.password` | `ifric` | Also the password used to connect to an external Postgres — set it to match. Changing it post-install doesn't rotate it inside an already-initialized bundled Postgres volume. |
 | `secrets.existingSecret` | `""` | Name of a Secret you manage yourself (Vault, Sealed Secrets, ...) with keys `KEYCLOAK_ADMIN_PASSWORD`/`KEYCLOAK_CLIENT_SECRET`/`KEYCLOAK_ADMIN_CLIENT_SECRET`/`HEDERA_KEY_SECRET`/`DB_PASSWORD` — when set, overrides all of the above |
 
 **Values** (full list with comments in `values.yaml`, mirrors `backend/.env.example`):
@@ -118,8 +147,10 @@ install time and skip step 3.
 | Value | Default | Notes |
 |---|---|---|
 | `replicaCount` | `1` | Backend replica count |
-| `postgres.persistence.enabled` | `true` | Set `false` for ephemeral storage — testing only |
-| `keycloak.enabled` | `true` | Set `false` to point at an external Keycloak instead |
-| `icid.enabled` | `false` | Set via `values-full.yaml` |
-| `icid.mongodb.persistence.enabled` | `true` | Same ephemeral-storage toggle, for ICID's MongoDB |
+| `postgres.enabled` | `true` | Set `false` + `postgres.external.host`/`.port` for an external instance |
+| `postgres.persistence.enabled` | `true` | Set `false` for ephemeral storage — testing only; ignored when `postgres.enabled=false` |
+| `keycloak.enabled` | `true` | Set `false` + `env.keycloak.url`/`.realm` for an external instance |
+| `icid.enabled` | `false` | Set via `values-full.yaml`; `false` needs `env.icidServiceBackendUrl` pointed at an external instance |
+| `icid.mongodb.enabled` | `true` | Only relevant when `icid.enabled=true`. Set `false` + `icid.mongodb.external.url` for an external replica set |
+| `icid.mongodb.persistence.enabled` | `true` | Same ephemeral-storage toggle, for the bundled MongoDB |
 | `ingress.enabled` | `false` | Requires `ingress.host` |

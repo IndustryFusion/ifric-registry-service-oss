@@ -86,7 +86,18 @@ resources: {}
 #   limits:
 #     memory: 512Mi
 
+# Set enabled=false to use an external PostgreSQL instance instead of the
+# bundled StatefulSet — point postgres.external.host/port at it. auth.*
+# always means "credentials the app (and Keycloak) connect with", whether
+# that's the bundled instance (which auth.user/password/database also
+# provision on first boot) or an external one you've already set up with
+# matching credentials.
 postgres:
+  enabled: true
+  external:
+    # Only used when enabled=false.
+    host: ""
+    port: 5432
   image:
     repository: postgres
     tag: "16"
@@ -127,7 +138,15 @@ icid:
   # it's a seed value, not a secret. Override for a real deployment.
   ifricNamespace: "1b671a64-40d5-491e-99b0-da01ff1f3341"
 
+  # ICID's own required database — set enabled=false to point ICID at an
+  # external MongoDB replica set you manage instead of the bundled
+  # single-node StatefulSet. Only relevant when icid.enabled=true.
   mongodb:
+    enabled: true
+    external:
+      # Full MONGO_URL connection string (including your own replica-set/
+      # auth query params) — only used when mongodb.enabled=false.
+      url: ""
     image:
       repository: mongo
       tag: "7"

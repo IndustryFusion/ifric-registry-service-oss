@@ -33,7 +33,7 @@ spec:
             - sh
             - -c
             - |
-              until pg_isready -h {{ include "ifric-registry-service.postgresHost" . }} -p {{ .Values.postgres.service.port }} -U {{ .Values.postgres.auth.user }}; do
+              until pg_isready -h {{ include "ifric-registry-service.postgresHostResolved" . }} -p {{ include "ifric-registry-service.postgresPortResolved" . }} -U {{ .Values.postgres.auth.user }}; do
                 echo "waiting for postgres..."
                 sleep 2
               done

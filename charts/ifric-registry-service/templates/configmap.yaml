@@ -5,8 +5,8 @@ metadata:
   labels:
     {{- include "ifric-registry-service.labels" . | nindent 4 }}
 data:
-  DB_HOST: {{ include "ifric-registry-service.postgresHost" . | quote }}
-  DB_PORT: {{ .Values.postgres.service.port | quote }}
+  DB_HOST: {{ include "ifric-registry-service.postgresHostResolved" . | quote }}
+  DB_PORT: {{ include "ifric-registry-service.postgresPortResolved" . | quote }}
   DB_USER: {{ .Values.postgres.auth.user | quote }}
   DB_NAME: {{ .Values.postgres.auth.database | quote }}
   PORT: {{ .Values.service.port | quote }}
