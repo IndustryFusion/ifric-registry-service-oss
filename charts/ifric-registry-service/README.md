@@ -10,6 +10,26 @@ and certificates. Two profiles, mirroring the root Compose files:
 | Default (ICID external) | `values.yaml` alone |
 | Full (+ bundled ICID) | `values.yaml` + `values-full.yaml` |
 
+```mermaid
+flowchart LR
+    Backend["Backend Pod<br/>(this app)"]
+    KC["Keycloak Pod"]
+    PG[("Postgres<br/>StatefulSet")]
+    ICID["ICID Pod<br/>(icid.enabled only)"]
+    Mongo[("ICID MongoDB<br/>StatefulSet<br/>(icid.enabled only)")]
+
+    Backend -- "wait-for-postgres + migrate<br/>initContainers" --> PG
+    Backend -- "login / tokens / user mgmt" --> KC
+    Backend -. "company creation / certs<br/>(icid.enabled, or an external URL)" .-> ICID
+    KC -- "wait-for-postgres<br/>initContainer, KC_DB=postgres" --> PG
+    ICID -- "wait-for-mongo + init-replicaset<br/>initContainers" --> Mongo
+```
+
+Postgres is shared by the backend and Keycloak (separate tables, no
+collision). ICID and its MongoDB only exist when `icid.enabled: true`
+(the full profile) — otherwise `env.icidServiceBackendUrl` points at an
+external instance instead.
+
 ## Install
 
 **1. Build and push this service's image** (ICID and Keycloak need no
@@ -103,18 +123,3 @@ install time and skip step 3.
 | `icid.enabled` | `false` | Set via `values-full.yaml` |
 | `icid.mongodb.persistence.enabled` | `true` | Same ephemeral-storage toggle, for ICID's MongoDB |
 | `ingress.enabled` | `false` | Requires `ingress.host` |
-
-**Not included:** autoscaling (HPA), Bitnami/external chart dependencies
-(Postgres/MongoDB are hand-rolled `StatefulSet`s), a CI pipeline for
-ICID's image, and a Keycloak realm-export/auto-import mechanism (setup is
-manual by design — see step 3 above).
-
-**Lint/template check:**
-
-```bash
-helm lint charts/ifric-registry-service --set env.icidServiceBackendUrl=https://example.com
-helm lint charts/ifric-registry-service -f charts/ifric-registry-service/values-full.yaml \
-  --set icid.image.repository=x --set icid.image.tag=y
-
-helm template my-registry charts/ifric-registry-service --set env.icidServiceBackendUrl=https://example.com
-```
