@@ -252,6 +252,15 @@ ICID runs unmodified) — use it to test ICID-integration changes end to end
 instead of guessing at the contract from the code alone. The Helm chart's
 `values-full.yaml` overlay defaults to the same image, for the same reason.
 
+ICID's own env vars (verified against its source, not assumed): `MONGO_URL`,
+`CORS_ORIGIN`, `IFRIC_NAMESPACE` (uuidv5 seed, used by its
+company/gateway/asset/user/contract services) are all set by
+`docker-compose.full.yaml`/the Helm chart. `HBAR_URL`/`ASSET_VC_TOPIC_ID`
+(`certificate.service.ts`) and `CONTRACT_DEFAULT_CODE`/`BINDING_DEFAULT_CODE`
+(`contract.service.ts`) are deliberately left unset — this repo never calls
+the endpoints that read them (`/certificate/*`'s Hedera path, `/contract`,
+`/binding`), so their absence is inert, not a gap in this integration.
+
 ### Data model shape
 
 Core entities live in `backend/src/entities/` (TypeORM). Company is the

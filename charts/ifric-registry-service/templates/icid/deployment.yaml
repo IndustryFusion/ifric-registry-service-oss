@@ -51,6 +51,15 @@ spec:
                 }
               '
       containers:
+        # Only /company, /script, and /certificate/* are exercised by this
+        # chart — verified against ICID's actual source
+        # (github.com/IndustryFusion/icidservice), not assumed. Two env vars
+        # ICID reads are deliberately left unset since nothing here calls
+        # the endpoints that need them: HBAR_URL/ASSET_VC_TOPIC_ID
+        # (certificate.service.ts — only Hedera sub-account/cert-issuance
+        # calls) and CONTRACT_DEFAULT_CODE/BINDING_DEFAULT_CODE
+        # (contract.service.ts — only POST /contract and /binding). Calling
+        # those endpoints without them set throws — expected, not a bug here.
         - name: icid
           image: "{{ .Values.icid.image.repository }}:{{ .Values.icid.image.tag }}"
           imagePullPolicy: {{ .Values.icid.image.pullPolicy }}

@@ -134,11 +134,14 @@ services:
   # vendored into this repo. Pulled as a published, unmodified image — no
   # build step, no git-context/network dependency at `up` time.
   #
-  # Only /company and /script are exercised by this stack. Hedera and
-  # certificate-signing dependencies (HBAR_URL, ASSET_VC_TOPIC_ID,
-  # CERTIFICATE_PATH, KEY_PATH) are deliberately left unset — those endpoints
-  # exist on ICID but are intentionally not wired up here; calling them will
-  # fail, which is expected.
+  # Only /company, /script, and /certificate/* are exercised by this stack —
+  # verified against ICID's actual source (github.com/IndustryFusion/icidservice),
+  # not assumed. Two env vars ICID reads are deliberately left unset since
+  # nothing here calls the endpoints that need them: HBAR_URL/ASSET_VC_TOPIC_ID
+  # (certificate.service.ts — only the Hedera sub-account/cert-issuance calls)
+  # and CONTRACT_DEFAULT_CODE/BINDING_DEFAULT_CODE (contract.service.ts — only
+  # POST /contract and /binding). Calling those endpoints without them set
+  # throws (e.g. `.split('-')` on undefined) — expected, not a bug here.
   icid:
     image: ibn40/icid-backend:latest
     ports:
