@@ -46,7 +46,7 @@ paths:
             type: string
       requestBody:
         required: true
-        description: Details for creating a company user
+        description: Details for creating a company user. A temporary password is generated and provisioned in Keycloak automatically — returned in the response, not supplied here.
         content:
           application/json:
             schema:
@@ -61,9 +61,6 @@ paths:
                 user_email:
                   type: string
                   example: johndoe@example.com
-                user_password:
-                  type: string
-                  example: securepassword123
                 products:
                   type: array
                   items:
@@ -84,7 +81,6 @@ paths:
                 - company_ifric_id
                 - user_name
                 - user_email
-                - user_password
                 - products
       responses:
         '201':
@@ -473,11 +469,7 @@ paths:
                 new_password:
                   type: string
                   example: NewPassword456
-                  description: New password for the user (if changing password)
-                jwt_token:
-                  type: string
-                  example: eyJhbGciOiJIUzI1NiIsInR...
-                  description: JWT token for authenticating the user
+                  description: New password for the user (if changing password). Verified and updated against Keycloak.
               required:
                 - company_ifric_id
                 - user_id
@@ -510,7 +502,7 @@ paths:
       parameters: []
       requestBody:
         required: true
-        description: Log out a user by providing their email address
+        description: Log out a user. Pass refresh_token (the one returned by /auth/login) to also revoke the session at Keycloak — omitting it still returns success but leaves the Keycloak session live until it naturally expires.
         content:
           application/json:
             schema:
@@ -520,6 +512,9 @@ paths:
                   type: string
                   example: user@example.com
                   description: The email address of the user to log out
+                refresh_token:
+                  type: string
+                  description: Optional. The refresh token to revoke at Keycloak.
               required:
                 - email
       responses:
@@ -535,7 +530,7 @@ paths:
       parameters: []
       requestBody:
         required: true
-        description: Exchange a refresh token (obtained from /auth/login) for a new, short-lived access token. Fails if the refresh token has expired or been revoked (e.g. by /auth/logout).
+        description: Exchange a refresh token (obtained from /auth/login) for a new, short-lived access token. Fails if the refresh token has expired or been revoked (e.g. by /auth/logout). Keycloak rotates refresh tokens by default, so the response also includes a new refresh_token — use it for the next refresh instead of the original.
         content:
           application/json:
             schema:
@@ -930,7 +925,18 @@ paths:
                   example: 1
                 company_category:
                   type: string
-                  example: IT Services
+                  enum:
+                    - manufacturer
+                    - machine_builder
+                    - factory_owner
+                    - user
+                    - public
+                    - service_provider
+                    - retailer
+                    - logistics
+                    - recycler
+                  example: manufacturer
+                  description: Must be one of the predefined company categories — see GET /company/get-categories for the current list.
                 meta_data:
                   type: object
                   additionalProperties: true
@@ -1270,6 +1276,19 @@ paths:
         - access-token: []
       tags:
         - Company
+  /company/get-categories:
+    get:
+      description: Returns every row in company_categories — the closed, seeded set of valid values for company_category on POST /company/create-company and PATCH /company/update-company/:id. Seed with POST /script if this returns empty.
+      operationId: CompanyController_getCompanyCategories
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Get the predefined list of company categories
+      tags:
+        - Company
   /company/get-manufacturer-companies/{count}:
     get:
       operationId: CompanyController_getManufacturerCompanies
@@ -1371,7 +1390,18 @@ paths:
                   example: 1
                 company_category:
                   type: string
-                  example: IT Services
+                  enum:
+                    - manufacturer
+                    - machine_builder
+                    - factory_owner
+                    - user
+                    - public
+                    - service_provider
+                    - retailer
+                    - logistics
+                    - recycler
+                  example: manufacturer
+                  description: Must be one of the predefined company categories — see GET /company/get-categories for the current list.
                 meta_data:
                   type: object
                   additionalProperties: true
@@ -1753,18 +1783,22 @@ paths:
         - Product
   /product/company/{id}:
     get:
+      description: Returns every CompanyProduct row tagged to this company — the external product_ifric_id values assigned via POST /product/company-product, plus the default product tags granted at company creation.
       operationId: ProductController_getCompanyProducts
       parameters:
         - name: id
           required: true
           in: path
+          description: The company's company_ifric_id (not its internal _id)
           schema:
+            example: COMPANY_IFRIC_ID_456
             type: string
       responses:
         '200':
           description: ''
       security:
         - access-token: []
+      summary: Get all products tagged to a company
       tags:
         - Product
   /product/{id}/name:
@@ -2071,7 +2105,7 @@ paths:
         - Product
 info:
   title: Ifric Registry Service
-  description: Open-source multi-tenant company/user/access-control/digital-twin registry service, split into Auth (session/identity), Company (company CRUD, access groups, physical assets), Product (product catalog, digital twins), Certificate, and Script (one-time seed data) controllers. All use a single bearer-JWT auth mechanism (POST /auth/login, refreshed via POST /auth/refresh). Certificate issuance and company_ifric_id minting integrate with an external open-source ICID-compatible service (see README.md).
+  description: Open-source multi-tenant company/user/access-control/digital-twin registry service, split into Auth (session/identity), Company (company CRUD, access groups, physical assets), Product (product catalog, digital twins), Certificate, and Script (one-time seed data) controllers. Authentication has no built-in implementation of its own — Keycloak is the sole identity provider (POST /auth/login, refreshed via POST /auth/refresh, both backed by Keycloak's token endpoint); every bearer token below is issued and verified by Keycloak, not signed locally. Certificate issuance and company_ifric_id minting integrate with an external open-source ICID-compatible service (see README.md).
   version: 0.1.0
   contact: {}
   license:

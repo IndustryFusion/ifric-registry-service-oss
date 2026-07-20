@@ -317,7 +317,18 @@ paths:
                   example: 1
                 company_category:
                   type: string
-                  example: IT Services
+                  enum:
+                    - manufacturer
+                    - machine_builder
+                    - factory_owner
+                    - user
+                    - public
+                    - service_provider
+                    - retailer
+                    - logistics
+                    - recycler
+                  example: manufacturer
+                  description: Must be one of the predefined company categories — see GET /company/get-categories for the current list.
                 meta_data:
                   type: object
                   additionalProperties: true
@@ -657,6 +668,19 @@ paths:
         - access-token: []
       tags:
         - Company
+  /company/get-categories:
+    get:
+      description: Returns every row in company_categories — the closed, seeded set of valid values for company_category on POST /company/create-company and PATCH /company/update-company/:id. Seed with POST /script if this returns empty.
+      operationId: CompanyController_getCompanyCategories
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Get the predefined list of company categories
+      tags:
+        - Company
   /company/get-manufacturer-companies/{count}:
     get:
       operationId: CompanyController_getManufacturerCompanies
@@ -758,7 +782,18 @@ paths:
                   example: 1
                 company_category:
                   type: string
-                  example: IT Services
+                  enum:
+                    - manufacturer
+                    - machine_builder
+                    - factory_owner
+                    - user
+                    - public
+                    - service_provider
+                    - retailer
+                    - logistics
+                    - recycler
+                  example: manufacturer
+                  description: Must be one of the predefined company categories — see GET /company/get-categories for the current list.
                 meta_data:
                   type: object
                   additionalProperties: true

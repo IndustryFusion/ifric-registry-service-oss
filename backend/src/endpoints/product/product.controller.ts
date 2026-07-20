@@ -148,8 +148,24 @@ export class ProductController {
     return this.productService.addCompanyProduct(data);
   }
 
+  /**
+   * Pass the company's company_ifric_id (not its internal _id) as :id.
+   */
   @UseGuards(AuthGuard)
   @Get('company/:id')
+  @ApiOperation({
+    summary: 'Get all products tagged to a company',
+    description:
+      'Returns every CompanyProduct row tagged to this company — the ' +
+      'external product_ifric_id values assigned via ' +
+      'POST /product/company-product, plus the default product tags ' +
+      'granted at company creation.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: "The company's company_ifric_id (not its internal _id)",
+    example: 'COMPANY_IFRIC_ID_456',
+  })
   getCompanyProducts(@Param('id') id: string) {
     return this.productService.getCompanyProducts(id);
   }

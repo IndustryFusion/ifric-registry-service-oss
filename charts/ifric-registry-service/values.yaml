@@ -1,0 +1,162 @@
+# Default profile: this service + its own PostgreSQL only. Matches
+# docker-compose.yaml. ICID is treated as external — point
+# env.icidServiceBackendUrl at a real instance if you need company
+# creation or certificates to work.
+#
+# For the full stack (this service + PostgreSQL + a bundled ICID + ICID's
+# own required MongoDB, matching docker-compose.full.yaml), install with
+# both files: `helm install -f values.yaml -f values-full.yaml`.
+
+image:
+  repository: ifric-registry-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 4007
+
+# Non-secret application config. See backend/.env.example and
+# backend/src/common/env.constants.ts for the full, authoritative list —
+# these are the same variables, just supplied via Kubernetes instead of a
+# .env file.
+env:
+  corsOrigin: "http://localhost:3000"
+  # Must match an object-type/subtype pair already seeded in the connected
+  # ICID instance (its own POST /script seeds "COM"/"NAP" for companies,
+  # compared case-sensitively) — see the root README.md's ICID integration
+  # notes before changing this.
+  companyDefaultCode: "IFX-COM-NAP"
+  # Only used when icid.enabled=false (see values-full.yaml) — point this
+  # at a real, reachable ICID-compatible instance. Ignored when
+  # icid.enabled=true: the chart computes the in-cluster URL itself.
+  icidServiceBackendUrl: ""
+  # This app has no built-in auth of its own — Keycloak is the sole
+  # identity provider. url/realm below are only used when
+  # keycloak.enabled=false (point at a real, reachable Keycloak instance);
+  # ignored when keycloak.enabled=true (default), where the chart computes
+  # the in-cluster URL/realm itself. clientId/adminClientId apply in both
+  # cases and match this app's own env.constants.ts defaults.
+  keycloak:
+    url: ""
+    realm: ""
+    clientId: "ifric"
+    adminClientId: "ifric-admin"
+
+# Secrets — never commit real values here. Use --set, a separate untracked
+# values file, or (recommended for real deployments) set
+# secrets.existingSecret to the name of a Secret you manage through your
+# own pipeline (Vault, Sealed Secrets, External Secrets, etc.) instead.
+secrets:
+  # Optional — leave blank to run without the certificate feature at all
+  # (this exactly matches HEDERA_KEY_SECRET's existing optionality: unset
+  # disables /certificate/* entirely, the app still boots either way).
+  # Generate with: openssl rand -hex 32
+  hederaKeySecret: ""
+  # Confidential-client secrets for Keycloak's "ifric" (end-user login) and
+  # "ifric-admin" (Admin API) clients — see the Keycloak section in this
+  # chart's README.md for the one-time manual realm/client setup that
+  # produces these values. Left blank, the backend Pod fails fast at boot
+  # (env.constants.ts) until you `helm upgrade` with the real values —
+  # there's no safe default, unlike hederaKeySecret, since the app has no
+  # auth mode that works without Keycloak.
+  keycloakClientSecret: ""
+  keycloakAdminClientSecret: ""
+  # Optional — Keycloak's own admin-console login password for this
+  # release's bundled instance (only relevant when keycloak.enabled=true).
+  # Leave blank and the chart generates a random one on first install, then
+  # reuses that same value on every subsequent `helm upgrade` (via `lookup`
+  # against the already-deployed Secret), so upgrades never lock you out of
+  # the console. Only relevant with the bundled Keycloak — ignored when
+  # keycloak.enabled=false.
+  keycloakAdminPassword: ""
+  # Name of a pre-existing Secret with keys KEYCLOAK_ADMIN_PASSWORD,
+  # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_ADMIN_CLIENT_SECRET, HEDERA_KEY_SECRET,
+  # and DB_PASSWORD. When set, the values above (and postgres.auth.password)
+  # are ignored and this chart creates no Secret of its own.
+  existingSecret: ""
+
+resources: {}
+# resources:
+#   requests:
+#     cpu: 100m
+#     memory: 128Mi
+#   limits:
+#     memory: 512Mi
+
+postgres:
+  image:
+    repository: postgres
+    tag: "16"
+  auth:
+    user: ifric
+    password: ifric
+    database: ifric_registry_service
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClassName: ""
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []
+
+# ICID (https://github.com/IndustryFusion/icidservice) — a separate
+# open-source service that mints company_ifric_id and issues/verifies
+# Hedera-backed certificates. Disabled by default in this profile; see
+# values-full.yaml. image.repository/tag default to the published,
+# unmodified ibn40/icid-backend image — override them if you're running
+# your own fork/build instead.
+icid:
+  enabled: false
+  image:
+    repository: ibn40/icid-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 4010
+  corsOrigin: "http://localhost:4007"
+  # UUID namespace ICID uses to derive ids (uuidv5) — any valid UUID works,
+  # it's a seed value, not a secret. Override for a real deployment.
+  ifricNamespace: "1b671a64-40d5-491e-99b0-da01ff1f3341"
+
+  mongodb:
+    image:
+      repository: mongo
+      tag: "7"
+    service:
+      port: 27017
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClassName: ""
+
+# Keycloak — this app's sole identity provider (see backend/src/common/
+# env.constants.ts). Unlike ICID (icid.enabled: false by default),
+# Keycloak defaults to enabled=true: both root Compose files bring
+# Keycloak up unconditionally, and this chart mirrors that. Deploying the
+# Keycloak Pod does not by itself make login work — see the Keycloak
+# section in this chart's README.md for the required one-time manual
+# realm/client setup and where the resulting secrets.keycloakClientSecret/
+# keycloakAdminClientSecret values go. Set keycloak.enabled=false to point
+# at a fully external Keycloak instead (env.keycloak.url/realm above).
+# KC_DB=postgres in the Deployment template reuses this chart's own
+# bundled Postgres (a different set of tables, no collision with the
+# backend's own) rather than giving Keycloak its own StatefulSet+PVC —
+# see templates/keycloak/deployment.yaml.
+keycloak:
+  enabled: true
+  image:
+    repository: quay.io/keycloak/keycloak
+    tag: "26.0"
+    pullPolicy: IfNotPresent
+  # Keycloak's own admin-console login username — see
+  # secrets.keycloakAdminPassword for the password.
+  adminUser: admin

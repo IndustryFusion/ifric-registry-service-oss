@@ -6,10 +6,11 @@ Thanks for your interest in contributing to Ifric Registry Service.
 
 1. `cd backend && npm install`
 2. Copy `backend/.env.example` to `backend/.env` and fill in the required values (see `README.md` for what each one does).
-3. Start MongoDB locally, or run `docker compose up mongo` from the repo root.
-4. `npm run start:dev`
+3. Start PostgreSQL locally, or run `docker compose up postgres` from the repo root.
+4. `npm run migration:run` (applies the TypeORM schema to your database)
+5. `npm run start:dev`
 
-The service needs a running [ICID](README.md#icid)-compatible instance reachable at `ICID_SERVICE_BACKEND_URL` for company creation and certificate endpoints to work end to end; everything else runs against MongoDB alone.
+The service needs a running [ICID](README.md#icid)-compatible instance reachable at `ICID_SERVICE_BACKEND_URL` for company creation and certificate endpoints to work end to end; everything else runs against PostgreSQL alone.
 
 ## Before opening a PR
 

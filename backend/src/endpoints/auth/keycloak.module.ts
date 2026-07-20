@@ -5,7 +5,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,20 +14,16 @@
 // limitations under the License.
 //
 
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import * as mongoose from 'mongoose';
-import { HydratedDocument } from 'mongoose';
+import { Global, Module } from '@nestjs/common';
+import { KeycloakService } from './keycloak.service';
 
-export type CompanyGateWayDocument = HydratedDocument<CompanyGateWay>;
-
-@Schema()
-export class CompanyGateWay {
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Company' })
-  company_id: mongoose.Schema.Types.ObjectId;
-
-  @Prop()
-  gateway_ifric_id: string;
-}
-
-export const CompanyGateWaySchema =
-  SchemaFactory.createForClass(CompanyGateWay);
+// @Global() so AuthGuard's dependency on KeycloakService resolves even for
+// controllers that use @UseGuards(AuthGuard) without importing AuthModule
+// (e.g. CertificateModule) — mirrors how JwtModule.register({global: true})
+// made the same shortcut work before this feature existed.
+@Global()
+@Module({
+  providers: [KeycloakService],
+  exports: [KeycloakService],
+})
+export class KeycloakModule {}

@@ -14,81 +14,74 @@
 // limitations under the License.
 //
 
-import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { UpdateUserDetails } from './dto/update-auth.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserProductAccessDto } from './dto/update-user-product-access.dto';
 import { FindOneAuthDto, FindIndexedDbAuthDto } from './dto/find-auth-dto';
 import { UserAccessDto } from './dto/user-access-dto';
-import { Model, Types } from 'mongoose';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { CompanyCategoryMapping } from 'src/schemas/company_category_mapping.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { InjectModel } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
+import { In, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { generateId } from 'src/database/generate-id';
+import {
+  Company,
+  CompanyUser,
+  CompanyCategory,
+  AccessGroup,
+  CompanyCategoryMapping,
+  UserProductAccessGroup,
+  CompanyProduct,
+  CompanyTwin,
+} from 'src/entities';
+import { KeycloakService } from './keycloak.service';
 import * as generator from 'generate-password';
 import * as dotenv from 'dotenv';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import * as moment from 'moment';
-import { jwtConstants } from './constants';
 
 dotenv.config();
-
-// Passwords are hashed with bcrypt (see hashPassword/comparePassword below)
-// — never stored or returned in reversible form.
-const BCRYPT_SALT_ROUNDS = 10;
 
 @Injectable()
 export class AuthService {
   constructor(
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
-    @InjectModel(Company.name)
-    private companyModel: Model<Company>,
-    @InjectModel(CompanyUser.name)
-    private companyUserModel: Model<CompanyUser>,
-    @InjectModel(CompanyCategory.name)
-    private companyCategoryModel: Model<CompanyCategory>,
-    @InjectModel(AccessGroup.name)
-    private accessGroupModel: Model<AccessGroup>,
-    @InjectModel(CompanyCategoryMapping.name)
-    private companyCategoryMappingModel: Model<CompanyCategoryMapping>,
-    @InjectModel(UserProductAccessGroup.name)
-    private userProductAccessGroupModel: Model<UserProductAccessGroup>,
-    @InjectModel(CompanyProduct.name)
-    private companyProductModel: Model<CompanyProduct>,
-    @InjectModel(CompanyTwin.name)
-    private companyTwinModel: Model<CompanyTwin>,
-    private jwtService: JwtService,
+    @InjectRepository(Company)
+    private companyRepository: Repository<Company>,
+    @InjectRepository(CompanyUser)
+    private companyUserRepository: Repository<CompanyUser>,
+    @InjectRepository(CompanyCategory)
+    private companyCategoryRepository: Repository<CompanyCategory>,
+    @InjectRepository(AccessGroup)
+    private accessGroupRepository: Repository<AccessGroup>,
+    @InjectRepository(CompanyCategoryMapping)
+    private companyCategoryMappingRepository: Repository<CompanyCategoryMapping>,
+    @InjectRepository(UserProductAccessGroup)
+    private userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
+    @InjectRepository(CompanyProduct)
+    private companyProductRepository: Repository<CompanyProduct>,
+    @InjectRepository(CompanyTwin)
+    private companyTwinRepository: Repository<CompanyTwin>,
+    private keycloakService: KeycloakService,
   ) {}
 
   async createCompanyUser(data: UserAccessDto, adminMail: string) {
     try {
       // Fetch User From Company User
-      const companyUserResponse = await this.companyUserModel.find({
-        user_email: data.user_email,
+      const companyUserResponse = await this.companyUserRepository.find({
+        where: { user_email: data.user_email },
       });
       if (companyUserResponse.length > 0) {
         throw new HttpException('User already exists', HttpStatus.CONFLICT);
       }
 
       // Fetch Company Id from Company Ifric Id
-      const companyData = await this.companyModel.find({
-        company_ifric_id: data.company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: data.company_ifric_id },
       });
-      const companyId = companyData[0].id;
-
-      // Create a refresh token — CompanyUser doesn't exist yet, so this
-      // just signs it; it's persisted below as part of the user doc itself.
-      const token = await this.signRefreshToken(companyId, data.user_email);
+      const companyId = companyData[0]._id;
 
       // Add Temporary Password
       const temporaryPassword = await generator.generate({
@@ -99,40 +92,45 @@ export class AuthService {
         excludeSimilarCharacters: true,
       });
 
-      // encrypt the password
-      const encryptedPassword = await this.hashPassword(temporaryPassword);
+      // Provision the identity in Keycloak — credentials live there, not
+      // in this table.
+      await this.keycloakService.createUser(
+        data.user_email,
+        data.user_name,
+        temporaryPassword,
+      );
 
-      const userData = new this.companyUserModel({
-        company_id: companyId,
-        user_email: data.user_email,
-        user_password: encryptedPassword,
-        user_name: data.user_name,
-        jwt_token: token,
-        meta_data: {
-          created_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-          updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-          add_by: adminMail,
-        },
-      });
-
-      const response = await userData.save();
+      const response = await this.companyUserRepository.save(
+        this.companyUserRepository.create({
+          company_id: companyId,
+          user_email: data.user_email,
+          user_name: data.user_name,
+          meta_data: {
+            created_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
+            updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
+            add_by: adminMail,
+          },
+        }),
+      );
 
       // Add Products To the User
       // data.products[i].product is a plain product identifier (internal
       // module name or external product_ifric_id) — no local catalog lookup.
       for (let i = 0; i < data.products.length; i++) {
-        const accessGroupData = await this.accessGroupModel.find({
-          company_id: companyId,
-          group_name: data.products[i].user_role,
+        const accessGroupData = await this.accessGroupRepository.find({
+          where: {
+            company_id: companyId,
+            group_name: data.products[i].user_role,
+          },
         });
         if (accessGroupData.length > 0) {
-          const userProductAccessGroupResponse =
-            new this.userProductAccessGroupModel({
-              user_id: response.id,
+          await this.userProductAccessGroupRepository.save(
+            this.userProductAccessGroupRepository.create({
+              user_id: response._id,
               product_ifric_id: data.products[i].product,
-              access_group_id: accessGroupData[0].id,
-            });
-          await userProductAccessGroupResponse.save();
+              access_group_id: accessGroupData[0]._id,
+            }),
+          );
         }
       }
 
@@ -156,22 +154,24 @@ export class AuthService {
   async logIn(data: FindOneAuthDto) {
     try {
       // Fetch Data from Company User
-      const companyUserResponse = await this.companyUserModel.find({
-        user_email: data.email,
+      const companyUserResponse = await this.companyUserRepository.find({
+        where: { user_email: data.email },
       });
       if (companyUserResponse.length > 0) {
-        const passwordMatches = await bcrypt.compare(
+        // Throws HttpException('Invalid Password', BAD_REQUEST) itself on
+        // bad credentials. Called exactly once — the resulting tokens are
+        // reused at whichever response branch fires below, since asking
+        // Keycloak to authenticate the same credentials twice would open a
+        // second, redundant session.
+        const keycloakTokens = await this.keycloakService.passwordGrant(
+          data.email,
           data.password,
-          companyUserResponse[0].user_password,
         );
-        if (!passwordMatches) {
-          throw new HttpException('Invalid Password', HttpStatus.BAD_REQUEST);
-        }
 
         // Fetch Company IFRIC ID
-        const companyResponse = await this.companyModel.findById(
-          companyUserResponse[0].company_id,
-        );
+        const companyResponse = await this.companyRepository.findOne({
+          where: { _id: companyUserResponse[0].company_id },
+        });
         if (!companyResponse) {
           throw new HttpException(
             'No company found with the provided ID',
@@ -181,20 +181,23 @@ export class AuthService {
 
         // Fetch Data from Company Category Mapping
         const companyCategoryMappingData =
-          await this.companyCategoryMappingModel.find({
-            company_id: companyUserResponse[0].company_id,
+          await this.companyCategoryMappingRepository.find({
+            where: { company_id: companyUserResponse[0].company_id },
           });
         if (companyCategoryMappingData.length > 0) {
           // Fetch Data from Company Category
-          const companyCategoryData = await this.companyCategoryModel.findById(
-            companyCategoryMappingData[0].category_id,
-          );
+          const companyCategoryData =
+            await this.companyCategoryRepository.findOne({
+              where: { _id: companyCategoryMappingData[0].category_id },
+            });
           if (Object.keys(companyCategoryData).length > 0) {
             if (data.product_name === 'DPP Creator') {
               const companyProductDppCreator =
-                await this.companyProductModel.findOne({
-                  company_id: companyUserResponse[0].company_id,
-                  product_ifric_id: 'DPP Creator',
+                await this.companyProductRepository.findOne({
+                  where: {
+                    company_id: companyUserResponse[0].company_id,
+                    product_ifric_id: 'DPP Creator',
+                  },
                 });
               if (!companyProductDppCreator) {
                 throw new HttpException(
@@ -203,47 +206,53 @@ export class AuthService {
                 );
               }
               const companyProductIfricdDashboard =
-                await this.companyProductModel.findOne({
-                  company_id: companyUserResponse[0].company_id,
-                  product_ifric_id: 'IFRIC Dashboard',
+                await this.companyProductRepository.findOne({
+                  where: {
+                    company_id: companyUserResponse[0].company_id,
+                    product_ifric_id: 'IFRIC Dashboard',
+                  },
                 });
               const userProductAccessDataDPP =
-                await this.userProductAccessGroupModel.find({
-                  user_id: companyUserResponse[0].id,
-                  product_ifric_id: companyProductDppCreator.product_ifric_id,
+                await this.userProductAccessGroupRepository.find({
+                  where: {
+                    user_id: companyUserResponse[0]._id,
+                    product_ifric_id: companyProductDppCreator.product_ifric_id,
+                  },
                 });
               const userProductAccessDataIfric = companyProductIfricdDashboard
-                ? await this.userProductAccessGroupModel.find({
-                    user_id: companyUserResponse[0].id,
-                    product_ifric_id:
-                      companyProductIfricdDashboard.product_ifric_id,
+                ? await this.userProductAccessGroupRepository.find({
+                    where: {
+                      user_id: companyUserResponse[0]._id,
+                      product_ifric_id:
+                        companyProductIfricdDashboard.product_ifric_id,
+                    },
                   })
                 : [];
               if (
                 userProductAccessDataIfric.length ||
                 userProductAccessDataDPP.length
               ) {
-                const tokens = await this.issueTokenPair(
-                  companyUserResponse[0].company_id.toString(),
-                  companyUserResponse[0].user_email,
-                );
                 const accessDataDPP = userProductAccessDataDPP[0]
-                  ? await this.accessGroupModel.findById(
-                      userProductAccessDataDPP[0].access_group_id,
-                    )
+                  ? await this.accessGroupRepository.findOne({
+                      where: {
+                        _id: userProductAccessDataDPP[0].access_group_id,
+                      },
+                    })
                   : null;
                 const accessDataIfricDashBoard = userProductAccessDataIfric[0]
-                  ? await this.accessGroupModel.findById(
-                      userProductAccessDataIfric[0].access_group_id,
-                    )
+                  ? await this.accessGroupRepository.findOne({
+                      where: {
+                        _id: userProductAccessDataIfric[0].access_group_id,
+                      },
+                    })
                   : null;
                 return {
                   status: 200,
                   data: {
                     company_ifric_id: companyResponse.company_ifric_id,
                     user_name: companyUserResponse[0].user_name,
-                    access_token: tokens.access_token,
-                    refresh_token: tokens.refresh_token,
+                    access_token: keycloakTokens.access_token,
+                    refresh_token: keycloakTokens.refresh_token,
                     user_role: companyCategoryData.category_name,
                     access_group_DPP: accessDataDPP,
                     access_group_Ifric_Dashboard: accessDataIfricDashBoard,
@@ -252,32 +261,33 @@ export class AuthService {
                 };
               }
             } else {
-              const companyProduct = await this.companyProductModel.findOne({
-                company_id: companyUserResponse[0].company_id,
-                product_ifric_id: data.product_name,
-              });
+              const companyProduct =
+                await this.companyProductRepository.findOne({
+                  where: {
+                    company_id: companyUserResponse[0].company_id,
+                    product_ifric_id: data.product_name,
+                  },
+                });
               if (companyProduct) {
                 const userProductAccessData =
-                  await this.userProductAccessGroupModel.find({
-                    user_id: companyUserResponse[0].id,
-                    product_ifric_id: companyProduct.product_ifric_id,
+                  await this.userProductAccessGroupRepository.find({
+                    where: {
+                      user_id: companyUserResponse[0]._id,
+                      product_ifric_id: companyProduct.product_ifric_id,
+                    },
                   });
 
                 if (userProductAccessData.length > 0) {
-                  const accessData = await this.accessGroupModel.findById(
-                    userProductAccessData[0].access_group_id,
-                  );
-                  const tokens = await this.issueTokenPair(
-                    companyUserResponse[0].company_id.toString(),
-                    companyUserResponse[0].user_email,
-                  );
+                  const accessData = await this.accessGroupRepository.findOne({
+                    where: { _id: userProductAccessData[0].access_group_id },
+                  });
                   return {
                     status: 200,
                     data: {
                       company_ifric_id: companyResponse.company_ifric_id,
                       user_name: companyUserResponse[0].user_name,
-                      access_token: tokens.access_token,
-                      refresh_token: tokens.refresh_token,
+                      access_token: keycloakTokens.access_token,
+                      refresh_token: keycloakTokens.refresh_token,
                       user_role: companyCategoryData.category_name,
                       access_group: accessData,
                       user_email: companyUserResponse[0].user_email,
@@ -325,14 +335,14 @@ export class AuthService {
   async getIndexedData(data: FindIndexedDbAuthDto) {
     try {
       // Fetch Data from Company User
-      const companyUserResponse = await this.companyUserModel.find({
-        user_email: data.email,
+      const companyUserResponse = await this.companyUserRepository.find({
+        where: { user_email: data.email },
       });
       if (companyUserResponse.length > 0) {
         // Fetch Company IFRIC ID
-        const companyResponse = await this.companyModel.findById(
-          data.company_id,
-        );
+        const companyResponse = await this.companyRepository.findOne({
+          where: { _id: data.company_id },
+        });
         if (!companyResponse) {
           throw new HttpException(
             'No company found with the provided ID',
@@ -342,64 +352,72 @@ export class AuthService {
 
         // Fetch Data from Company Category Mapping
         const companyCategoryMappingData =
-          await this.companyCategoryMappingModel.find({
-            company_id: companyUserResponse[0].company_id,
+          await this.companyCategoryMappingRepository.find({
+            where: { company_id: companyUserResponse[0].company_id },
           });
         if (companyCategoryMappingData.length > 0) {
           // Fetch Data from Company Category
-          const companyCategoryData = await this.companyCategoryModel.findById(
-            companyCategoryMappingData[0].category_id,
-          );
+          const companyCategoryData =
+            await this.companyCategoryRepository.findOne({
+              where: { _id: companyCategoryMappingData[0].category_id },
+            });
           if (Object.keys(companyCategoryData).length > 0) {
             if (data.product_name === 'DPP Creator') {
               const companyProductDppCreator =
-                await this.companyProductModel.findOne({
-                  company_id: companyUserResponse[0].company_id,
-                  product_ifric_id: 'DPP Creator',
+                await this.companyProductRepository.findOne({
+                  where: {
+                    company_id: companyUserResponse[0].company_id,
+                    product_ifric_id: 'DPP Creator',
+                  },
                 });
               const companyProductIfricdDashboard =
-                await this.companyProductModel.findOne({
-                  company_id: companyUserResponse[0].company_id,
-                  product_ifric_id: 'IFRIC Dashboard',
+                await this.companyProductRepository.findOne({
+                  where: {
+                    company_id: companyUserResponse[0].company_id,
+                    product_ifric_id: 'IFRIC Dashboard',
+                  },
                 });
               const userProductAccessDataDPP = companyProductDppCreator
-                ? await this.userProductAccessGroupModel.find({
-                    user_id: companyUserResponse[0].id,
-                    product_ifric_id: companyProductDppCreator.product_ifric_id,
+                ? await this.userProductAccessGroupRepository.find({
+                    where: {
+                      user_id: companyUserResponse[0]._id,
+                      product_ifric_id:
+                        companyProductDppCreator.product_ifric_id,
+                    },
                   })
                 : [];
               const userProductAccessDataIfric = companyProductIfricdDashboard
-                ? await this.userProductAccessGroupModel.find({
-                    user_id: companyUserResponse[0].id,
-                    product_ifric_id:
-                      companyProductIfricdDashboard.product_ifric_id,
+                ? await this.userProductAccessGroupRepository.find({
+                    where: {
+                      user_id: companyUserResponse[0]._id,
+                      product_ifric_id:
+                        companyProductIfricdDashboard.product_ifric_id,
+                    },
                   })
                 : [];
               if (
                 userProductAccessDataIfric.length ||
                 userProductAccessDataDPP.length
               ) {
-                const tokens = await this.issueTokenPair(
-                  companyUserResponse[0].company_id.toString(),
-                  companyUserResponse[0].user_email,
-                );
                 const accessDataDPP = userProductAccessDataDPP[0]
-                  ? await this.accessGroupModel.findById(
-                      userProductAccessDataDPP[0].access_group_id,
-                    )
+                  ? await this.accessGroupRepository.findOne({
+                      where: {
+                        _id: userProductAccessDataDPP[0].access_group_id,
+                      },
+                    })
                   : null;
                 const accessDataIfricDashBoard = userProductAccessDataIfric[0]
-                  ? await this.accessGroupModel.findById(
-                      userProductAccessDataIfric[0].access_group_id,
-                    )
+                  ? await this.accessGroupRepository.findOne({
+                      where: {
+                        _id: userProductAccessDataIfric[0].access_group_id,
+                      },
+                    })
                   : null;
                 return {
                   status: 200,
                   data: {
                     company_ifric_id: companyResponse.company_ifric_id,
                     user_name: companyUserResponse[0].user_name,
-                    access_token: tokens.access_token,
-                    refresh_token: tokens.refresh_token,
                     user_role: companyCategoryData.category_name,
                     access_group_DPP: accessDataDPP,
                     access_group_Ifric_Dashboard: accessDataIfricDashBoard,
@@ -408,32 +426,30 @@ export class AuthService {
                 };
               }
             }
-            const companyProduct = await this.companyProductModel.findOne({
-              company_id: companyUserResponse[0].company_id,
-              product_ifric_id: data.product_name,
+            const companyProduct = await this.companyProductRepository.findOne({
+              where: {
+                company_id: companyUserResponse[0].company_id,
+                product_ifric_id: data.product_name,
+              },
             });
             if (companyProduct) {
               const userProductAccessData =
-                await this.userProductAccessGroupModel.find({
-                  user_id: companyUserResponse[0].id,
-                  product_ifric_id: companyProduct.product_ifric_id,
+                await this.userProductAccessGroupRepository.find({
+                  where: {
+                    user_id: companyUserResponse[0]._id,
+                    product_ifric_id: companyProduct.product_ifric_id,
+                  },
                 });
 
               if (userProductAccessData.length > 0) {
-                const accessData = await this.accessGroupModel.findById(
-                  userProductAccessData[0].access_group_id,
-                );
-                const tokens = await this.issueTokenPair(
-                  companyUserResponse[0].company_id.toString(),
-                  companyUserResponse[0].user_email,
-                );
+                const accessData = await this.accessGroupRepository.findOne({
+                  where: { _id: userProductAccessData[0].access_group_id },
+                });
                 return {
                   status: 200,
                   data: {
                     company_ifric_id: companyResponse.company_ifric_id,
                     user_name: companyUserResponse[0].user_name,
-                    access_token: tokens.access_token,
-                    refresh_token: tokens.refresh_token,
                     user_role: companyCategoryData.category_name,
                     access_group: accessData,
                     user_email: companyUserResponse[0].user_email,
@@ -479,9 +495,7 @@ export class AuthService {
 
   async authenticateToken(token: string) {
     try {
-      await this.jwtService.verifyAsync(token, {
-        secret: jwtConstants.secret,
-      });
+      await this.keycloakService.verifyAccessToken(token);
 
       return true;
     } catch (err) {
@@ -497,7 +511,9 @@ export class AuthService {
 
   async getCompanyUsers(id: string) {
     try {
-      const response = await this.companyModel.find({ company_ifric_id: id });
+      const response = await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
       if (response.length === 0) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -505,7 +521,9 @@ export class AuthService {
         );
       }
 
-      return await this.companyUserModel.find({ company_id: response[0].id });
+      return await this.companyUserRepository.find({
+        where: { company_id: response[0]._id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -517,9 +535,15 @@ export class AuthService {
     }
   }
 
+  // Ported from a $lookup aggregation (companyusers -> userproductaccessgroups
+  // -> accessgroups). Assembled as plain queries + in-memory joins instead of
+  // one SQL mega-join, to keep the output shape easy to verify field-by-field
+  // against the original $project stage.
   async getCompanyUsersAccess(company_ifric_id: string) {
     try {
-      const response = await this.companyModel.findOne({ company_ifric_id });
+      const response = await this.companyRepository.findOne({
+        where: { company_ifric_id },
+      });
       if (!response) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -527,76 +551,54 @@ export class AuthService {
         );
       }
 
-      return await this.companyUserModel.aggregate([
-        {
-          $match: {
-            company_id: response._id,
-          },
-        },
-        {
-          $lookup: {
-            from: 'userproductaccessgroups',
-            localField: '_id',
-            foreignField: 'user_id',
-            as: 'userAccessGroups',
-          },
-        },
-        {
-          $lookup: {
-            from: 'accessgroups',
-            localField: 'userAccessGroups.access_group_id',
-            foreignField: '_id',
-            as: 'accessGroups',
-          },
-        },
-        {
-          $project: {
-            id: '$_id',
-            name: '$user_name',
-            email: '$user_email',
-            img: '',
-            status: 'active',
-            access: {
-              $setUnion: [
-                {
-                  $map: {
-                    input: '$accessGroups',
-                    as: 'group',
-                    in: '$$group.group_name',
-                  },
-                },
-              ],
-            },
-            date_added: {
-              $cond: [
-                { $ifNull: ['$meta_data.created_at', false] },
-                {
-                  $dateToString: {
-                    format: '%d-%m-%Y %H:%M',
-                    date: { $toDate: '$meta_data.created_at' },
-                  },
-                },
-                '',
-              ],
-            },
-            date_updated: {
-              $cond: [
-                { $ifNull: ['$meta_data.updated_at', false] },
-                {
-                  $dateToString: {
-                    format: '%d-%m-%Y %H:%M',
-                    date: { $toDate: '$meta_data.updated_at' },
-                  },
-                },
-                '',
-              ],
-            },
-            add_by: {
-              $ifNull: ['$meta_data.add_by', ''],
-            },
-          },
-        },
-      ]);
+      const users = await this.companyUserRepository.find({
+        where: { company_id: response._id },
+      });
+      if (users.length === 0) {
+        return [];
+      }
+
+      const userIds = users.map((u) => u._id);
+      const accessRows = await this.userProductAccessGroupRepository.find({
+        where: { user_id: In(userIds) },
+      });
+      const accessGroupIds = [
+        ...new Set(accessRows.map((r) => r.access_group_id)),
+      ];
+      const accessGroups = accessGroupIds.length
+        ? await this.accessGroupRepository.find({
+            where: { _id: In(accessGroupIds) },
+          })
+        : [];
+      const groupNameById = new Map(
+        accessGroups.map((g) => [g._id, g.group_name]),
+      );
+
+      const accessByUser = new Map<string, Set<string>>();
+      for (const row of accessRows) {
+        if (!accessByUser.has(row.user_id)) {
+          accessByUser.set(row.user_id, new Set());
+        }
+        const name = groupNameById.get(row.access_group_id);
+        if (name) {
+          accessByUser.get(row.user_id).add(name);
+        }
+      }
+
+      const formatDate = (value: any) =>
+        value ? moment.utc(value).format('DD-MM-YYYY HH:mm') : '';
+
+      return users.map((user) => ({
+        id: user._id,
+        name: user.user_name,
+        email: user.user_email,
+        img: '',
+        status: 'active',
+        access: Array.from(accessByUser.get(user._id) ?? []),
+        date_added: formatDate(user.meta_data?.created_at),
+        date_updated: formatDate(user.meta_data?.updated_at),
+        add_by: user.meta_data?.add_by ?? '',
+      }));
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -608,9 +610,17 @@ export class AuthService {
     }
   }
 
+  // Ported from a $lookup aggregation on userproductaccessgroups. One row per
+  // (user, product) access grant; product_roles is the full list of role
+  // names defined for the company (same for every row, not specific to it —
+  // matches the original sub-pipeline, which filtered accessgroups by
+  // company_id only). Rows whose access_group_id doesn't resolve to a real
+  // AccessGroup are dropped, matching the original's non-preserving $unwind.
   async getUserProfileContent(company_ifric_id: string, user_id: string) {
     try {
-      const response = await this.companyModel.findOne({ company_ifric_id });
+      const response = await this.companyRepository.findOne({
+        where: { company_ifric_id },
+      });
       if (!response) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -618,54 +628,32 @@ export class AuthService {
         );
       }
 
-      return await this.userProductAccessGroupModel.aggregate([
-        {
-          $match: {
-            user_id: new Types.ObjectId(user_id),
-          },
-        },
-        {
-          $lookup: {
-            from: 'accessgroups',
-            let: { companyId: response._id.toString() },
-            pipeline: [
-              {
-                $match: {
-                  $expr: { $eq: ['$company_id', '$$companyId'] },
-                },
-              },
-            ],
-            as: 'accessGroups',
-          },
-        },
-        {
-          $lookup: {
-            from: 'accessgroups',
-            localField: 'access_group_id',
-            foreignField: '_id',
-            as: 'userRoleData',
-          },
-        },
-        { $unwind: '$userRoleData' },
-        {
-          $project: {
-            product: '$product_ifric_id',
-            product_roles: {
-              $setUnion: [
-                {
-                  $map: {
-                    input: '$accessGroups',
-                    as: 'group',
-                    in: '$$group.group_name',
-                  },
-                },
-              ],
-            },
-            last_active: 'Jul 23, 2024',
-            user_role: '$userRoleData.group_name',
-          },
-        },
-      ]);
+      const rows = await this.userProductAccessGroupRepository.find({
+        where: { user_id },
+      });
+      const companyAccessGroups = await this.accessGroupRepository.find({
+        where: { company_id: response._id },
+      });
+      const productRoles = [
+        ...new Set(companyAccessGroups.map((g) => g.group_name)),
+      ];
+
+      const results = [];
+      for (const row of rows) {
+        const userRoleData = await this.accessGroupRepository.findOne({
+          where: { _id: row.access_group_id },
+        });
+        if (!userRoleData) {
+          continue;
+        }
+        results.push({
+          product: row.product_ifric_id,
+          product_roles: productRoles,
+          last_active: 'Jul 23, 2024',
+          user_role: userRoleData.group_name,
+        });
+      }
+      return results;
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -679,7 +667,9 @@ export class AuthService {
 
   async getUserProductAccess(id: string) {
     try {
-      return await this.userProductAccessGroupModel.find({ user_id: id });
+      return await this.userProductAccessGroupRepository.find({
+        where: { user_id: id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -693,8 +683,8 @@ export class AuthService {
 
   async getUserDetails(user_email: string, company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: company_ifric_id },
       });
       if (companyData.length == 0) {
         throw new HttpException(
@@ -703,14 +693,9 @@ export class AuthService {
         );
       }
 
-      const response = await this.companyUserModel.find({
-        user_email: user_email,
-        company_id: companyData[0].id,
+      const response = await this.companyUserRepository.find({
+        where: { user_email: user_email, company_id: companyData[0]._id },
       });
-      // Never return the password hash to a caller.
-      if (response.length) {
-        response[0].user_password = undefined;
-      }
       return response;
     } catch (err) {
       if (err instanceof HttpException) {
@@ -725,7 +710,9 @@ export class AuthService {
 
   async getUserDetailsById(id: string) {
     try {
-      const companyUserData = await this.companyUserModel.find({ _id: id });
+      const companyUserData = await this.companyUserRepository.find({
+        where: { _id: id },
+      });
       if (companyUserData.length == 0) {
         throw new HttpException(
           'No User found with the provided ID',
@@ -733,10 +720,6 @@ export class AuthService {
         );
       }
 
-      // Never return the password hash to a caller.
-      if (companyUserData.length) {
-        companyUserData[0].user_password = undefined;
-      }
       return companyUserData;
     } catch (err) {
       if (err instanceof HttpException) {
@@ -751,18 +734,14 @@ export class AuthService {
 
   async getUserDetailsByEmail(email: string) {
     try {
-      const companyUserData = await this.companyUserModel.find({
-        user_email: email,
+      const companyUserData = await this.companyUserRepository.find({
+        where: { user_email: email },
       });
       if (companyUserData.length == 0) {
         throw new HttpException(
           'No User found with the provided ID',
           HttpStatus.NOT_FOUND,
         );
-      }
-      // Never return the password hash to a caller.
-      if (companyUserData.length) {
-        companyUserData[0].user_password = undefined;
       }
       return companyUserData;
     } catch (err) {
@@ -778,7 +757,7 @@ export class AuthService {
 
   async getTotalUsers() {
     try {
-      return await this.companyUserModel.countDocuments();
+      return await this.companyUserRepository.count();
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -792,9 +771,8 @@ export class AuthService {
 
   async getUserSpecificProductAccess(product_name: string, user_id: string) {
     try {
-      return await this.userProductAccessGroupModel.find({
-        product_ifric_id: product_name,
-        user_id,
+      return await this.userProductAccessGroupRepository.find({
+        where: { product_ifric_id: product_name, user_id },
       });
     } catch (err) {
       if (err instanceof HttpException) {
@@ -808,15 +786,15 @@ export class AuthService {
   }
 
   async checkCompanyAdmin(email: string) {
-    const companyUser = await this.companyUserModel.findOne({
-      user_email: email,
+    const companyUser = await this.companyUserRepository.findOne({
+      where: { user_email: email },
     });
 
     if (!companyUser) {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);
     }
 
-    const company = await this.companyModel.findOne({ email });
+    const company = await this.companyRepository.findOne({ where: { email } });
 
     return {
       isAdmin: !!company,
@@ -825,44 +803,22 @@ export class AuthService {
 
   async updateUserPassword(data: UpdatePasswordDto) {
     try {
-      const companyResponse = await this.companyModel.find({
-        email: data.email,
-      });
-      const companyUserResponse = await this.companyUserModel.find({
-        user_email: data.email,
+      const companyUserResponse = await this.companyUserRepository.find({
+        where: { user_email: data.email },
       });
 
       if (data.oldPassword && data.newPassword) {
-        // hash the new password
-        const encryptedPassword = await this.hashPassword(data.newPassword);
-
-        if (companyResponse.length > 0) {
-          const oldPasswordMatches = await this.comparePassword(
-            data.oldPassword,
-            companyResponse[0].password,
-          );
-          if (!oldPasswordMatches) {
-            throw new UnauthorizedException();
-          }
-          await this.companyModel.findByIdAndUpdate(companyResponse[0].id, {
-            password: encryptedPassword,
-          });
-        }
         if (companyUserResponse.length > 0) {
-          const oldPasswordMatches = await this.comparePassword(
+          // Verifies the old password against Keycloak and throws
+          // HttpException('Invalid Password', BAD_REQUEST) itself on
+          // mismatch — replaces the old bare UnauthorizedException() this
+          // branch used to throw.
+          await this.keycloakService.passwordGrant(
+            data.email,
             data.oldPassword,
-            companyUserResponse[0].user_password,
           );
-          if (!oldPasswordMatches) {
-            throw new UnauthorizedException();
-          }
-          const response = await this.companyUserModel.findByIdAndUpdate(
-            companyUserResponse[0].id,
-            { user_password: encryptedPassword },
-          );
-          if (response) {
-            return { status: 204, message: 'Password Updated Successfully' };
-          }
+          await this.keycloakService.setPassword(data.email, data.newPassword);
+          return { status: 204, message: 'Password Updated Successfully' };
         } else {
           throw new HttpException(
             'No User found with the provided ID',
@@ -888,30 +844,39 @@ export class AuthService {
 
   async updateUserAccessGroup(id: string, data: UpdateUserProductAccessDto[]) {
     try {
-      const companyUserResponse = await this.companyUserModel.findById(id);
+      const companyUserResponse = await this.companyUserRepository.findOne({
+        where: { _id: id },
+      });
       if (companyUserResponse) {
         const companyId = companyUserResponse.company_id;
         for (let i = 0; i < data.length; i++) {
-          const accessGroupData = await this.accessGroupModel.find({
-            company_id: companyId,
-            group_name: data[i].user_role,
+          const accessGroupData = await this.accessGroupRepository.find({
+            where: { company_id: companyId, group_name: data[i].user_role },
           });
           if (accessGroupData.length > 0) {
-            const filter = { user_id: id, product_ifric_id: data[i].product };
-            const update = { access_group_id: accessGroupData[0].id };
-            const options = { new: true, upsert: true };
-            await this.userProductAccessGroupModel.findOneAndUpdate(
-              filter,
-              update,
-              options,
+            // Atomic upsert via raw SQL, not repository.upsert() — the
+            // latter builds a raw INSERT that bypasses BaseEntity's
+            // @BeforeInsert() hook, so a freshly-inserted row would get a
+            // NULL primary key. _id is only used on the insert branch; the
+            // ON CONFLICT DO UPDATE never touches it.
+            await this.userProductAccessGroupRepository.query(
+              `INSERT INTO user_product_access_groups (_id, user_id, product_ifric_id, access_group_id)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (user_id, product_ifric_id)
+               DO UPDATE SET access_group_id = EXCLUDED.access_group_id`,
+              [generateId(), id, data[i].product, accessGroupData[0]._id],
             );
           }
         }
-        await this.companyUserModel.findByIdAndUpdate(companyUserResponse.id, {
-          'meta_data.updated_at': moment()
-            .utc()
-            .format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-        });
+        await this.companyUserRepository.update(
+          { _id: companyUserResponse._id },
+          {
+            meta_data: {
+              ...(companyUserResponse.meta_data ?? {}),
+              updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
+            } as Record<string, any>,
+          },
+        );
         return {
           status: 204,
           message: 'User Product Access Updated Successfully',
@@ -932,8 +897,8 @@ export class AuthService {
 
   async updateCompanyUser(data: UpdateUserDetails) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: data.company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: data.company_ifric_id },
       });
 
       if (!companyData.length) {
@@ -943,57 +908,45 @@ export class AuthService {
         );
       }
 
-      const companyUserResponse = await this.companyUserModel.findById(
-        data.user_id,
-      );
+      const companyUserResponse = await this.companyUserRepository.findOne({
+        where: { _id: data.user_id },
+      });
       if (!companyUserResponse) {
         throw new HttpException('User Not Found', HttpStatus.NOT_FOUND);
       }
 
       if (data.old_password && data.new_password) {
-        const oldPasswordMatches = await this.comparePassword(
+        // Verifies the old password against Keycloak and throws
+        // HttpException('Invalid Password', BAD_REQUEST) itself on
+        // mismatch. The old jwt_token/decodedToken.sub check this branch
+        // used to do had no purpose beyond re-validating the caller's
+        // current session — AuthGuard (now backed by Keycloak) already did
+        // that before this guarded route was ever reached, so it's dropped
+        // along with the jwt_token column.
+        await this.keycloakService.passwordGrant(
+          companyUserResponse.user_email,
           data.old_password,
-          companyUserResponse.user_password,
         );
-        if (!oldPasswordMatches) {
-          throw new UnauthorizedException();
-        }
-
-        if (companyUserResponse.jwt_token !== data.jwt_token) {
-          throw new UnauthorizedException(
-            'Token does not match the one stored for the user.',
-          );
-        }
-
-        const decodedToken = this.jwtService.verify(data.jwt_token);
-        if (decodedToken.sub !== companyUserResponse.company_id.toString()) {
-          throw new UnauthorizedException('Token does not match user.');
-        }
-
-        // hash the new password
-        const encryptedPassword = await this.hashPassword(data.new_password);
-
-        const response = await this.companyUserModel.findByIdAndUpdate(
-          companyUserResponse.id,
-          { user_password: encryptedPassword },
+        await this.keycloakService.setPassword(
+          companyUserResponse.user_email,
+          data.new_password,
         );
-        if (!response) {
-          throw new HttpException(
-            'Error Updating User Password',
-            HttpStatus.INTERNAL_SERVER_ERROR,
-          );
-        }
       }
 
       if (data.user_email) {
+        await this.keycloakService.setEmail(
+          companyUserResponse.user_email,
+          data.user_email,
+        );
+
         // check whether the user is admin then update email in company table
         if (companyUserResponse.user_email === companyData[0].email) {
-          const companyMailUpdate = await this.companyModel.findByIdAndUpdate(
-            companyData[0].id,
+          const companyMailResult = await this.companyRepository.update(
+            { _id: companyData[0]._id },
             { email: data.user_email },
           );
 
-          if (!companyMailUpdate) {
+          if (!(companyMailResult.affected > 0)) {
             throw new HttpException(
               'Error Updating Company Email',
               HttpStatus.INTERNAL_SERVER_ERROR,
@@ -1001,11 +954,11 @@ export class AuthService {
           }
         }
 
-        const response = await this.companyUserModel.findByIdAndUpdate(
-          companyUserResponse.id,
+        const result = await this.companyUserRepository.update(
+          { _id: companyUserResponse._id },
           { user_email: data.user_email },
         );
-        if (!response) {
+        if (!(result.affected > 0)) {
           throw new HttpException(
             'Error Updating User Email',
             HttpStatus.INTERNAL_SERVER_ERROR,
@@ -1014,11 +967,11 @@ export class AuthService {
       }
 
       if (data.user_name) {
-        const response = await this.companyUserModel.findByIdAndUpdate(
-          companyUserResponse.id,
+        const result = await this.companyUserRepository.update(
+          { _id: companyUserResponse._id },
           { user_name: data.user_name },
         );
-        if (!response) {
+        if (!(result.affected > 0)) {
           throw new HttpException(
             'Error Updating User Name',
             HttpStatus.INTERNAL_SERVER_ERROR,
@@ -1027,22 +980,26 @@ export class AuthService {
       }
 
       if (data.user_image) {
-        const response = await this.companyUserModel.findByIdAndUpdate(
-          companyUserResponse.id,
+        const result = await this.companyUserRepository.update(
+          { _id: companyUserResponse._id },
           { user_image: data.user_image },
         );
-        if (!response) {
+        if (!(result.affected > 0)) {
           throw new HttpException(
             'Error Updating User Image',
             HttpStatus.INTERNAL_SERVER_ERROR,
           );
         }
       }
-      await this.companyUserModel.findByIdAndUpdate(companyUserResponse.id, {
-        'meta_data.updated_at': moment()
-          .utc()
-          .format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-      });
+      await this.companyUserRepository.update(
+        { _id: companyUserResponse._id },
+        {
+          meta_data: {
+            ...(companyUserResponse.meta_data ?? {}),
+            updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
+          } as Record<string, any>,
+        },
+      );
       return { status: 204, message: 'User Details Updated Successfully' };
     } catch (err) {
       if (err instanceof HttpException) {
@@ -1057,8 +1014,14 @@ export class AuthService {
 
   async deleteCompanyUser(id: string) {
     try {
-      await this.userProductAccessGroupModel.deleteMany({ user_id: id });
-      return await this.companyUserModel.deleteOne({ _id: id });
+      const companyUser = await this.companyUserRepository.findOne({
+        where: { _id: id },
+      });
+      if (companyUser) {
+        await this.keycloakService.deleteUser(companyUser.user_email);
+      }
+      await this.userProductAccessGroupRepository.delete({ user_id: id });
+      return await this.companyUserRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1070,20 +1033,18 @@ export class AuthService {
     }
   }
 
-  async logOut(data: { email: string }) {
+  async logOut(data: { email: string; refresh_token?: string }) {
     try {
-      const companyUser = await this.companyUserModel.findOne({
-        user_email: data.email,
+      const companyUser = await this.companyUserRepository.findOne({
+        where: { user_email: data.email },
       });
       if (companyUser) {
-        // Clears the stored refresh token, so /auth/refresh will reject it —
-        // this is what revocation means now that access tokens are
-        // stateless (see AuthGuard); any access token issued before logout
-        // remains valid until it naturally expires.
-        await this.companyUserModel.updateOne(
-          { user_email: data.email },
-          { $set: { jwt_token: null } },
-        );
+        // Best-effort — KeycloakService.revoke() swallows its own errors,
+        // so a briefly-unreachable Keycloak can't turn a successful logout
+        // into a failed one.
+        if (data.refresh_token) {
+          await this.keycloakService.revoke(data.refresh_token);
+        }
         return {
           success: true,
           status: 200,
@@ -1109,30 +1070,24 @@ export class AuthService {
     newPassword: string,
   ) {
     try {
-      const companyUser = await this.companyUserModel.findOne({
-        user_email: email,
+      const companyUser = await this.companyUserRepository.findOne({
+        where: { user_email: email },
       });
 
       if (!companyUser) {
         throw new HttpException('User not found', HttpStatus.NOT_FOUND);
       }
 
-      // Check if the current password matches
-      const temporaryPasswordMatches = await this.comparePassword(
-        temporaryPassword,
-        companyUser.user_password,
-      );
-      if (!temporaryPasswordMatches) {
+      // Check if the current (temporary) password matches, via Keycloak.
+      try {
+        await this.keycloakService.passwordGrant(email, temporaryPassword);
+      } catch {
         throw new HttpException(
           'Current password is incorrect',
           HttpStatus.UNAUTHORIZED,
         );
       }
-      const encryptedPassword = await this.hashPassword(newPassword);
-      await this.companyUserModel.updateOne(
-        { user_email: email },
-        { $set: { user_password: encryptedPassword } },
-      );
+      await this.keycloakService.setPassword(email, newPassword);
 
       return {
         success: true,
@@ -1153,8 +1108,8 @@ export class AuthService {
 
   async recoverPasswordRequest(email: string) {
     try {
-      const companyUser = await this.companyUserModel.findOne({
-        user_email: email,
+      const companyUser = await this.companyUserRepository.findOne({
+        where: { user_email: email },
       });
 
       if (!companyUser) {
@@ -1169,12 +1124,7 @@ export class AuthService {
         excludeSimilarCharacters: true,
       });
 
-      const encryptedPassword = await this.hashPassword(temporaryPassword);
-      //  update the password in CompanyUserModel
-      await this.companyUserModel.updateOne(
-        { user_email: email },
-        { $set: { user_password: encryptedPassword } },
-      );
+      await this.keycloakService.setPassword(email, temporaryPassword);
 
       return {
         success: true,
@@ -1193,99 +1143,15 @@ export class AuthService {
     }
   }
 
-  // Short-lived, stateless — verified by signature only (see AuthGuard),
-  // no database round trip per request.
-  private async generateAccessToken(
-    companyId: string,
-    userEmail: string,
-  ): Promise<string> {
-    return this.jwtService.signAsync(
-      { sub: companyId, user: userEmail, type: 'access' },
-      { secret: jwtConstants.secret, expiresIn: '1h' },
-    );
-  }
-
-  // Long-lived. Signing only — does not touch the database. Use
-  // generateRefreshToken to also persist it to an existing CompanyUser.
-  private async signRefreshToken(
-    companyId: string,
-    userEmail: string,
-  ): Promise<string> {
-    return this.jwtService.signAsync(
-      { sub: companyId, user: userEmail, type: 'refresh' },
-      { secret: jwtConstants.secret, expiresIn: '30d' },
-    );
-  }
-
-  // Persisted to CompanyUser.jwt_token — this is the only place revocation
-  // is checked (see refreshAccessToken/logOut), since access tokens are
-  // stateless. Requires the CompanyUser document to already exist.
-  private async generateRefreshToken(
-    companyId: string,
-    userEmail: string,
-  ): Promise<string> {
-    const token = await this.signRefreshToken(companyId, userEmail);
-    await this.companyUserModel.updateOne(
-      { user_email: userEmail },
-      { $set: { jwt_token: token } },
-    );
-    return token;
-  }
-
-  private async issueTokenPair(
-    companyId: string,
-    userEmail: string,
-  ): Promise<{ access_token: string; refresh_token: string }> {
-    const access_token = await this.generateAccessToken(companyId, userEmail);
-    const refresh_token = await this.generateRefreshToken(companyId, userEmail);
-    return { access_token, refresh_token };
-  }
-
   /**
-   * Exchanges a refresh token for a new access token. This is where
-   * session revocation is actually enforced: the refresh token must still
-   * match CompanyUser.jwt_token (logOut clears that field).
+   * Exchanges a refresh token for a new access token (and, since Keycloak
+   * rotates refresh tokens by default, typically a new refresh token too —
+   * surfaced as an additive field). Session revocation/expiry is enforced
+   * entirely by Keycloak now, not by a local DB lookup.
    */
   async refreshAccessToken(
     refreshToken: string,
-  ): Promise<{ access_token: string }> {
-    let payload: any;
-    try {
-      payload = await this.jwtService.verifyAsync(refreshToken, {
-        secret: jwtConstants.secret,
-      });
-    } catch {
-      throw new UnauthorizedException('Invalid or expired refresh token');
-    }
-    if (payload.type !== 'refresh') {
-      throw new UnauthorizedException('Token is not a valid refresh token');
-    }
-    const companyId =
-      typeof payload.sub === 'string'
-        ? Types.ObjectId.createFromHexString(payload.sub)
-        : payload.sub;
-    const companyUser = await this.companyUserModel.findOne({
-      jwt_token: refreshToken,
-      user_email: payload.user,
-      company_id: companyId,
-    });
-    if (!companyUser) {
-      throw new UnauthorizedException('Refresh token has been revoked');
-    }
-    const access_token = await this.generateAccessToken(
-      payload.sub,
-      payload.user,
-    );
-    return { access_token };
-  }
-
-  // One-way password hashing. Passwords are never stored or returned in
-  // reversible form — compare with comparePassword, never decrypt.
-  async hashPassword(plainText: string): Promise<string> {
-    return bcrypt.hash(plainText, BCRYPT_SALT_ROUNDS);
-  }
-
-  async comparePassword(plainText: string, hash: string): Promise<boolean> {
-    return bcrypt.compare(plainText, hash);
+  ): Promise<{ access_token: string; refresh_token: string }> {
+    return this.keycloakService.refreshGrant(refreshToken);
   }
 }

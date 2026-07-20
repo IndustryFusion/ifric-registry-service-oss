@@ -43,7 +43,10 @@ export class AuthController {
   @UseGuards(AuthGuard)
   @Post('create-user/:admin_mail')
   @ApiBody({
-    description: 'Details for creating a company user',
+    description:
+      'Details for creating a company user. A temporary password is ' +
+      'generated and provisioned in Keycloak automatically — returned in ' +
+      'the response, not supplied here.',
     required: true,
     schema: {
       type: 'object',
@@ -59,10 +62,6 @@ export class AuthController {
         user_email: {
           type: 'string',
           example: 'johndoe@example.com',
-        },
-        user_password: {
-          type: 'string',
-          example: 'securepassword123',
         },
         products: {
           type: 'array',
@@ -85,13 +84,7 @@ export class AuthController {
           ],
         },
       },
-      required: [
-        'company_ifric_id',
-        'user_name',
-        'user_email',
-        'user_password',
-        'products',
-      ],
+      required: ['company_ifric_id', 'user_name', 'user_email', 'products'],
     },
   })
   createCompanyUser(
@@ -346,12 +339,9 @@ export class AuthController {
         new_password: {
           type: 'string',
           example: 'NewPassword456',
-          description: 'New password for the user (if changing password)',
-        },
-        jwt_token: {
-          type: 'string',
-          example: 'eyJhbGciOiJIUzI1NiIsInR...',
-          description: 'JWT token for authenticating the user',
+          description:
+            'New password for the user (if changing password). Verified ' +
+            'and updated against Keycloak.',
         },
       },
       required: ['company_ifric_id', 'user_id'],
@@ -369,7 +359,10 @@ export class AuthController {
 
   @Post('logout')
   @ApiBody({
-    description: 'Log out a user by providing their email address',
+    description:
+      'Log out a user. Pass refresh_token (the one returned by /auth/login) ' +
+      'to also revoke the session at Keycloak — omitting it still returns ' +
+      'success but leaves the Keycloak session live until it naturally expires.',
     required: true,
     schema: {
       type: 'object',
@@ -379,11 +372,15 @@ export class AuthController {
           example: 'user@example.com',
           description: 'The email address of the user to log out',
         },
+        refresh_token: {
+          type: 'string',
+          description: 'Optional. The refresh token to revoke at Keycloak.',
+        },
       },
       required: ['email'],
     },
   })
-  logOut(@Body() data: { email: string }) {
+  logOut(@Body() data: { email: string; refresh_token?: string }) {
     return this.authService.logOut(data);
   }
 
@@ -392,7 +389,9 @@ export class AuthController {
     description:
       'Exchange a refresh token (obtained from /auth/login) for a new, ' +
       'short-lived access token. Fails if the refresh token has expired ' +
-      'or been revoked (e.g. by /auth/logout).',
+      'or been revoked (e.g. by /auth/logout). Keycloak rotates refresh ' +
+      'tokens by default, so the response also includes a new refresh_token ' +
+      '— use it for the next refresh instead of the original.',
     required: true,
     schema: {
       type: 'object',

@@ -1,0 +1,18 @@
+apiVersion: v2
+name: ifric-registry-service
+description: >-
+  Multi-tenant company/user/access-control/digital-twin registry service,
+  backed by PostgreSQL, with an optional bundled ICID instance (+ its own
+  required MongoDB) for company creation and certificates.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/IndustryFusion/ifric-registry-service-oss
+sources:
+  - https://github.com/IndustryFusion/ifric-registry-service-oss
+keywords:
+  - registry
+  - multi-tenant
+  - digital-twin
+  - nestjs
+  - postgresql

@@ -1,0 +1,19 @@
+{{- if .Values.icid.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ifric-registry-service.icidMongoHost" . }}
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: icid-mongodb
+spec:
+  clusterIP: None
+  ports:
+    - port: {{ .Values.icid.mongodb.service.port }}
+      targetPort: mongodb
+      protocol: TCP
+      name: mongodb
+  selector:
+    {{- include "ifric-registry-service.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: icid-mongodb
+{{- end }}

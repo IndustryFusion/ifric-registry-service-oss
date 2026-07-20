@@ -5,7 +5,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,16 +14,14 @@
 // limitations under the License.
 //
 
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { Column, Entity } from 'typeorm';
+import { BaseEntity } from '../database/base.entity';
 
-export type CompanyCategoryDocument = HydratedDocument<CompanyCategory>;
+@Entity('company_servers')
+export class CompanyServer extends BaseEntity {
+  @Column({ type: 'char', length: 24, nullable: true })
+  company_id: string;
 
-@Schema()
-export class CompanyCategory {
-  @Prop()
-  category_name: string;
+  @Column({ type: 'varchar', nullable: true })
+  server_ifric_id: string;
 }
-
-export const CompanyCategorySchema =
-  SchemaFactory.createForClass(CompanyCategory);

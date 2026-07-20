@@ -5,7 +5,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,27 +14,23 @@
 // limitations under the License.
 //
 
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import * as mongoose from 'mongoose';
-import { HydratedDocument } from 'mongoose';
+import { Column, Entity, Unique } from 'typeorm';
+import { BaseEntity } from '../database/base.entity';
 
-export type UserProductAccessGroupDocument =
-  HydratedDocument<UserProductAccessGroup>;
-
-@Schema()
-export class UserProductAccessGroup {
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'CompanyUser' })
-  user_id: mongoose.Schema.Types.ObjectId;
+// Composite UNIQUE is required, not optional — it's the ON CONFLICT target
+// for the upsert in AuthService.updateUserAccessGroup (findOneAndUpdate
+// with upsert:true in the Mongoose version, keyed on this same pair).
+@Entity('user_product_access_groups')
+@Unique(['user_id', 'product_ifric_id'])
+export class UserProductAccessGroup extends BaseEntity {
+  @Column({ type: 'char', length: 24, nullable: true })
+  user_id: string;
 
   // External product / internal-module identifier — a plain string, not a
   // local catalog reference. See CompanyProduct.product_ifric_id.
-  @Prop()
+  @Column({ type: 'varchar', nullable: true })
   product_ifric_id: string;
 
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'AccessGroup' })
-  access_group_id: mongoose.Schema.Types.ObjectId;
+  @Column({ type: 'char', length: 24, nullable: true })
+  access_group_id: string;
 }
-
-export const UserProductAccessGroupSchema = SchemaFactory.createForClass(
-  UserProductAccessGroup,
-);

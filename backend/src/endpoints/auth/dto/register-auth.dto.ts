@@ -14,6 +14,8 @@
 // limitations under the License.
 //
 
+import { CompanyCategoryName } from 'src/common/company-category.constants';
+
 export interface RegisterAuthDto {
   industry: string;
   company_name: string;
@@ -29,7 +31,7 @@ export interface RegisterAuthDto {
   password: string;
   company_size: string;
   company_category_id?: number;
-  company_category: string;
+  company_category: CompanyCategoryName;
   meta_data: Record<string, any>;
   company_domain: string;
   newsLetter: boolean;

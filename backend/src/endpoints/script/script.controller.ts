@@ -32,8 +32,9 @@ export class ScriptController {
   /**
    * Seeds the default RBAC access-group templates (read_only, create_only,
    * update_only, create_update, admin) and the default company-category
-   * taxonomy (manufacturer, user, public, service_provider, retailer,
-   * logistics, recycler, factory_owner). Run once against a fresh database.
+   * taxonomy (see COMPANY_CATEGORY_NAMES in
+   * src/common/company-category.constants.ts). Run once against a fresh
+   * database.
    */
   @Post()
   @ApiOperation({

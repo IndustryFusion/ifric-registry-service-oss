@@ -15,16 +15,19 @@
 //
 
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { Product } from 'src/schemas/products.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
-import { Factory } from 'src/schemas/factory.schema';
+import { In, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { generateId } from 'src/database/generate-id';
+import {
+  Company,
+  CompanyUser,
+  CompanyTwin,
+  CompanyProduct,
+  Product,
+  AccessGroup,
+  UserProductAccessGroup,
+  Factory,
+} from 'src/entities';
 import { AddProductDto } from './dto/add-product.dto';
 import { CompanyTwinDto } from './dto/company-twin.dto';
 import { UpdateCompanyProductDto } from './dto/update-company-product.dto';
@@ -32,16 +35,19 @@ import { UpdateCompanyProductDto } from './dto/update-company-product.dto';
 @Injectable()
 export class ProductService {
   constructor(
-    @InjectModel(Company.name) private companyModel: Model<Company>,
-    @InjectModel(CompanyUser.name) private companyUserModel: Model<CompanyUser>,
-    @InjectModel(CompanyTwin.name) private companyTwinModel: Model<CompanyTwin>,
-    @InjectModel(CompanyProduct.name)
-    private companyProductModel: Model<CompanyProduct>,
-    @InjectModel(Product.name) private productModel: Model<Product>,
-    @InjectModel(AccessGroup.name) private accessGroupModel: Model<AccessGroup>,
-    @InjectModel(UserProductAccessGroup.name)
-    private userProductAccessGroupModel: Model<UserProductAccessGroup>,
-    @InjectModel(Factory.name) private factoryModel: Model<Factory>,
+    @InjectRepository(Company) private companyRepository: Repository<Company>,
+    @InjectRepository(CompanyUser)
+    private companyUserRepository: Repository<CompanyUser>,
+    @InjectRepository(CompanyTwin)
+    private companyTwinRepository: Repository<CompanyTwin>,
+    @InjectRepository(CompanyProduct)
+    private companyProductRepository: Repository<CompanyProduct>,
+    @InjectRepository(Product) private productRepository: Repository<Product>,
+    @InjectRepository(AccessGroup)
+    private accessGroupRepository: Repository<AccessGroup>,
+    @InjectRepository(UserProductAccessGroup)
+    private userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
+    @InjectRepository(Factory) private factoryRepository: Repository<Factory>,
   ) {}
 
   async createCompanyTwin(data: CompanyTwinDto) {
@@ -57,8 +63,8 @@ export class ProductService {
         );
       }
 
-      const manufacturerData = await this.companyModel.find({
-        company_ifric_id: data.manufacturer_ifric_id,
+      const manufacturerData = await this.companyRepository.find({
+        where: { company_ifric_id: data.manufacturer_ifric_id },
       });
       if (manufacturerData.length === 0) {
         throw new HttpException(
@@ -67,8 +73,8 @@ export class ProductService {
         );
       }
 
-      const ownerData = await this.companyModel.find({
-        company_ifric_id: data.owner_company_ifric_id,
+      const ownerData = await this.companyRepository.find({
+        where: { company_ifric_id: data.owner_company_ifric_id },
       });
       if (ownerData.length === 0) {
         throw new HttpException(
@@ -78,21 +84,22 @@ export class ProductService {
       }
 
       if (data.factory_id) {
-        const factory = await this.factoryModel.find({
-          factory_id: data.factory_id,
+        const factory = await this.factoryRepository.find({
+          where: { factory_id: data.factory_id },
         });
         if (factory.length === 0) {
           throw new HttpException('Invalid factory_id', HttpStatus.BAD_REQUEST);
         }
       }
 
-      const companyTwinData = new this.companyTwinModel({
-        manufacturer_company_id: manufacturerData[0].id,
-        owner_company_id: ownerData[0].id,
-        asset_ifric_id: data.asset_ifric_id,
-        ...(data.factory_id && { factory_id: data.factory_id }),
-      });
-      await companyTwinData.save();
+      await this.companyTwinRepository.save(
+        this.companyTwinRepository.create({
+          manufacturer_company_id: manufacturerData[0]._id,
+          owner_company_id: ownerData[0]._id,
+          asset_ifric_id: data.asset_ifric_id,
+          ...(data.factory_id && { factory_id: data.factory_id }),
+        }),
+      );
 
       return {
         success: true,
@@ -118,8 +125,8 @@ export class ProductService {
   // external product to a company.
   async addCompanyProduct(data: AddProductDto) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: data.company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: data.company_ifric_id },
       });
       if (companyData.length === 0) {
         throw new HttpException(
@@ -135,10 +142,14 @@ export class ProductService {
         );
       }
 
-      const checkProductAvailability = await this.companyProductModel.find({
-        product_ifric_id: data.product_ifric_id,
-        company_id: companyData[0].id,
-      });
+      const checkProductAvailability = await this.companyProductRepository.find(
+        {
+          where: {
+            product_ifric_id: data.product_ifric_id,
+            company_id: companyData[0]._id,
+          },
+        },
+      );
 
       if (checkProductAvailability.length > 0) {
         throw new HttpException(
@@ -146,12 +157,13 @@ export class ProductService {
           HttpStatus.CONFLICT,
         );
       }
-      const companyProduct = new this.companyProductModel({
-        product_ifric_id: data.product_ifric_id,
-        company_id: companyData[0].id,
-        ...(data.billing_id && { billing_id: data.billing_id }),
-      });
-      await companyProduct.save();
+      await this.companyProductRepository.save(
+        this.companyProductRepository.create({
+          product_ifric_id: data.product_ifric_id,
+          company_id: companyData[0]._id,
+          ...(data.billing_id && { billing_id: data.billing_id }),
+        }),
+      );
 
       return {
         success: true,
@@ -171,7 +183,9 @@ export class ProductService {
 
   async getCompanyProducts(id: string) {
     try {
-      const response = await this.companyModel.find({ company_ifric_id: id });
+      const response = await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
       if (response.length === 0) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -179,8 +193,8 @@ export class ProductService {
         );
       }
 
-      return await this.companyProductModel.find({
-        company_id: response[0].id,
+      return await this.companyProductRepository.find({
+        where: { company_id: response[0]._id },
       });
     } catch (err) {
       if (err instanceof HttpException) {
@@ -195,7 +209,7 @@ export class ProductService {
 
   async getProductName(id: string) {
     try {
-      return await this.productModel.findById(id);
+      return await this.productRepository.findOne({ where: { _id: id } });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -209,8 +223,8 @@ export class ProductService {
 
   async getManufacturerAssets(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: company_ifric_id },
       });
       if (companyData.length == 0) {
         throw new HttpException(
@@ -219,9 +233,10 @@ export class ProductService {
         );
       }
 
-      const manufacturerAssetData = await this.companyTwinModel
-        .find({ manufacturer_company_id: companyData[0].id })
-        .sort({ _id: -1 });
+      const manufacturerAssetData = await this.companyTwinRepository.find({
+        where: { manufacturer_company_id: companyData[0]._id },
+        order: { _id: 'DESC' },
+      });
       if (manufacturerAssetData.length == 0) {
         throw new HttpException(
           'Manufacturer Asset not found',
@@ -246,8 +261,8 @@ export class ProductService {
     owner_company_ifric_id: string,
   ) {
     try {
-      const manufacturerCompanyData = await this.companyModel.find({
-        company_ifric_id: manufacturer_company_ifric_id,
+      const manufacturerCompanyData = await this.companyRepository.find({
+        where: { company_ifric_id: manufacturer_company_ifric_id },
       });
       if (manufacturerCompanyData.length == 0) {
         throw new HttpException(
@@ -256,8 +271,8 @@ export class ProductService {
         );
       }
 
-      const ownerCompanyData = await this.companyModel.find({
-        company_ifric_id: owner_company_ifric_id,
+      const ownerCompanyData = await this.companyRepository.find({
+        where: { company_ifric_id: owner_company_ifric_id },
       });
       if (ownerCompanyData.length == 0) {
         throw new HttpException(
@@ -266,12 +281,13 @@ export class ProductService {
         );
       }
 
-      return await this.companyTwinModel
-        .find({
-          manufacturer_company_id: manufacturerCompanyData[0].id,
-          owner_company_id: ownerCompanyData[0].id,
-        })
-        .sort({ _id: -1 });
+      return await this.companyTwinRepository.find({
+        where: {
+          manufacturer_company_id: manufacturerCompanyData[0]._id,
+          owner_company_id: ownerCompanyData[0]._id,
+        },
+        order: { _id: 'DESC' },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -285,7 +301,9 @@ export class ProductService {
 
   async getOwnerAssets(id: string) {
     try {
-      return await this.companyTwinModel.find({ owner_company_id: id });
+      return await this.companyTwinRepository.find({
+        where: { owner_company_id: id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -299,8 +317,8 @@ export class ProductService {
 
   async getCompanyTwinById(id: string) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: id },
       });
       if (!companyData.length) {
         throw new HttpException(
@@ -309,8 +327,8 @@ export class ProductService {
         );
       }
 
-      const responseAsset = await this.companyTwinModel.find({
-        manufacturer_company_id: companyData[0].id,
+      const responseAsset = await this.companyTwinRepository.find({
+        where: { manufacturer_company_id: companyData[0]._id },
       });
       return responseAsset;
     } catch (err) {
@@ -326,7 +344,9 @@ export class ProductService {
 
   async getCompanyTwinByAssetId(asset_ifric_id: string) {
     try {
-      return await this.companyTwinModel.find({ asset_ifric_id });
+      return await this.companyTwinRepository.find({
+        where: { asset_ifric_id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -340,8 +360,8 @@ export class ProductService {
 
   async getCompanyTwinCount(assetIds: string[]) {
     try {
-      const companyTwinData = await this.companyTwinModel.find({
-        asset_ifric_id: { $in: assetIds },
+      const companyTwinData = await this.companyTwinRepository.find({
+        where: { asset_ifric_id: In(assetIds) },
       });
       return companyTwinData.length;
     } catch (err) {
@@ -357,8 +377,8 @@ export class ProductService {
 
   async getCompanyTwinCountByCompanyIfricId(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
       });
       if (companyData.length === 0) {
         throw new HttpException(
@@ -366,8 +386,8 @@ export class ProductService {
           HttpStatus.NOT_FOUND,
         );
       }
-      const companyTwinData = await this.companyTwinModel.find({
-        manufacturer_company_id: companyData[0].id,
+      const companyTwinData = await this.companyTwinRepository.find({
+        where: { manufacturer_company_id: companyData[0]._id },
       });
       return companyTwinData.length;
     } catch (err) {
@@ -387,7 +407,9 @@ export class ProductService {
   // — see the comment on addCompanyProduct.
   async updateCompanyProduct(id: string, data: UpdateCompanyProductDto) {
     try {
-      const response = await this.companyModel.find({ company_ifric_id: id });
+      const response = await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
       if (response.length === 0) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -402,10 +424,17 @@ export class ProductService {
         );
       }
 
-      await this.companyProductModel.findOneAndUpdate(
-        { company_id: response[0].id, product_ifric_id: data.product_ifric_id },
-        { company_id: response[0].id, product_ifric_id: data.product_ifric_id },
-        { upsert: true, new: true },
+      // Atomic upsert via raw SQL, not repository.upsert() — the latter
+      // builds a raw INSERT that bypasses BaseEntity's @BeforeInsert()
+      // hook, so a freshly-inserted row would get a NULL primary key. _id
+      // is only used on the insert branch; the update payload here is
+      // identical to the filter, so ON CONFLICT DO NOTHING is equivalent
+      // to DO UPDATE and cheaper.
+      await this.companyProductRepository.query(
+        `INSERT INTO company_products (_id, company_id, product_ifric_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (company_id, product_ifric_id) DO NOTHING`,
+        [generateId(), response[0]._id, data.product_ifric_id],
       );
 
       return {
@@ -426,8 +455,8 @@ export class ProductService {
 
   async updateCompanyTwin(data: CompanyTwinDto) {
     try {
-      const ownerCompanyData = await this.companyModel.find({
-        company_ifric_id: data.owner_company_ifric_id,
+      const ownerCompanyData = await this.companyRepository.find({
+        where: { company_ifric_id: data.owner_company_ifric_id },
       });
       if (ownerCompanyData.length === 0) {
         throw new HttpException(
@@ -436,8 +465,8 @@ export class ProductService {
         );
       }
 
-      const manufacturerCompanyData = await this.companyModel.find({
-        company_ifric_id: data.manufacturer_ifric_id,
+      const manufacturerCompanyData = await this.companyRepository.find({
+        where: { company_ifric_id: data.manufacturer_ifric_id },
       });
       if (manufacturerCompanyData.length === 0) {
         throw new HttpException(
@@ -447,32 +476,48 @@ export class ProductService {
       }
 
       if (data.factory_id) {
-        const factory = await this.factoryModel.find({
-          factory_id: data.factory_id,
+        const factory = await this.factoryRepository.find({
+          where: { factory_id: data.factory_id },
         });
         if (factory.length === 0) {
           throw new HttpException('Invalid factory_id', HttpStatus.BAD_REQUEST);
         }
       }
 
-      const filter = {
-        manufacturer_company_id: manufacturerCompanyData[0].id,
-        asset_ifric_id: data.asset_ifric_id,
-      };
-      const update = {
-        owner_company_id: ownerCompanyData[0].id,
-        ...(data.factory_id && { factory_id: data.factory_id }),
-      };
-      const options = { new: true, upsert: true };
-      const response = await this.companyTwinModel.findOneAndUpdate(
-        filter,
-        update,
-        options,
-      );
-      if (!response) {
-        throw new HttpException(
-          'No record found with the provided data',
-          HttpStatus.NOT_FOUND,
+      // Atomic upsert (create-or-reassign) via raw SQL, not
+      // repository.upsert() — the latter builds a raw INSERT that bypasses
+      // BaseEntity's @BeforeInsert() hook, so a freshly-inserted row would
+      // get a NULL primary key. When factory_id isn't provided, the SET
+      // clause omits it entirely (matching the original conditional-spread
+      // update object) so an existing row's factory_id is left untouched
+      // rather than cleared.
+      const twinId = generateId();
+      if (data.factory_id) {
+        await this.companyTwinRepository.query(
+          `INSERT INTO company_twins (_id, manufacturer_company_id, asset_ifric_id, owner_company_id, factory_id)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (manufacturer_company_id, asset_ifric_id)
+           DO UPDATE SET owner_company_id = EXCLUDED.owner_company_id, factory_id = EXCLUDED.factory_id`,
+          [
+            twinId,
+            manufacturerCompanyData[0]._id,
+            data.asset_ifric_id,
+            ownerCompanyData[0]._id,
+            data.factory_id,
+          ],
+        );
+      } else {
+        await this.companyTwinRepository.query(
+          `INSERT INTO company_twins (_id, manufacturer_company_id, asset_ifric_id, owner_company_id)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (manufacturer_company_id, asset_ifric_id)
+           DO UPDATE SET owner_company_id = EXCLUDED.owner_company_id`,
+          [
+            twinId,
+            manufacturerCompanyData[0]._id,
+            data.asset_ifric_id,
+            ownerCompanyData[0]._id,
+          ],
         );
       }
       return {
@@ -492,7 +537,7 @@ export class ProductService {
 
   async deleteCompanyProduct(id: string) {
     try {
-      return await this.companyProductModel.deleteOne({ _id: id });
+      return await this.companyProductRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -506,8 +551,8 @@ export class ProductService {
 
   async deleteCompanyTwins(assetIds: string[]) {
     try {
-      return await this.companyTwinModel.deleteMany({
-        asset_ifric_id: { $in: assetIds },
+      return await this.companyTwinRepository.delete({
+        asset_ifric_id: In(assetIds),
       });
     } catch (err) {
       if (err instanceof HttpException) {
@@ -522,7 +567,7 @@ export class ProductService {
 
   async deleteCompanyTwinAsset(id: string) {
     try {
-      return await this.companyTwinModel.deleteOne({ asset_ifric_id: id });
+      return await this.companyTwinRepository.delete({ asset_ifric_id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -536,10 +581,10 @@ export class ProductService {
 
   async findProductIdByProductName(productName: string) {
     try {
-      const product = await this.productModel.findOne({
-        product_name: productName,
+      const product = await this.productRepository.findOne({
+        where: { product_name: productName },
       });
-      return product ? product._id.toString() : null;
+      return product ? product._id : null;
     } catch (err) {
       console.error('Error finding product ID:', err);
       throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -553,11 +598,14 @@ export class ProductService {
   // ===========================================================================
 
   async getProductCompany(productUrn: string): Promise<Record<string, any>> {
-    const twin = await this.companyTwinModel.findOne({
-      asset_ifric_id: productUrn,
+    const twin = await this.companyTwinRepository.findOne({
+      where: { asset_ifric_id: productUrn },
     });
     const company =
-      twin && (await this.companyModel.findById(twin.manufacturer_company_id));
+      twin &&
+      (await this.companyRepository.findOne({
+        where: { _id: twin.manufacturer_company_id },
+      }));
     if (!company) {
       return {
         company: null,
@@ -568,11 +616,14 @@ export class ProductService {
   }
 
   async getProductOwner(productUrn: string): Promise<Record<string, any>> {
-    const twin = await this.companyTwinModel.findOne({
-      asset_ifric_id: productUrn,
+    const twin = await this.companyTwinRepository.findOne({
+      where: { asset_ifric_id: productUrn },
     });
     const owner =
-      twin && (await this.companyModel.findById(twin.owner_company_id));
+      twin &&
+      (await this.companyRepository.findOne({
+        where: { _id: twin.owner_company_id },
+      }));
     if (!owner) {
       return {
         owner: null,
@@ -585,12 +636,14 @@ export class ProductService {
   async getProductFactoryLocation(
     productUrn: string,
   ): Promise<Record<string, any>> {
-    const twin = await this.companyTwinModel.findOne({
-      asset_ifric_id: productUrn,
+    const twin = await this.companyTwinRepository.findOne({
+      where: { asset_ifric_id: productUrn },
     });
     const factory =
       twin?.factory_id &&
-      (await this.factoryModel.findOne({ factory_id: twin.factory_id }));
+      (await this.factoryRepository.findOne({
+        where: { factory_id: twin.factory_id },
+      }));
     if (!factory) {
       return {
         factory: null,

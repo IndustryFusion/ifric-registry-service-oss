@@ -15,13 +15,11 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { KeycloakService } from '../auth/keycloak.service';
 import { CertificateController } from './certificate.controller';
 import { CertificateService } from './certificate.service';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { Certificate } from 'src/schemas/certificate.schema';
+import { Company, CompanyUser, Certificate } from 'src/entities';
 
 describe('CertificateController', () => {
   let controller: CertificateController;
@@ -31,12 +29,12 @@ describe('CertificateController', () => {
       controllers: [CertificateController],
       providers: [
         CertificateService,
-        { provide: getModelToken(Company.name), useValue: {} },
-        { provide: getModelToken(CompanyUser.name), useValue: {} },
-        { provide: getModelToken(Certificate.name), useValue: {} },
+        { provide: getRepositoryToken(Company), useValue: {} },
+        { provide: getRepositoryToken(CompanyUser), useValue: {} },
+        { provide: getRepositoryToken(Certificate), useValue: {} },
         // Satisfies AuthGuard's dependencies (applied via @UseGuards on
         // this controller's routes, so its own deps must resolve too).
-        { provide: JwtService, useValue: {} },
+        { provide: KeycloakService, useValue: {} },
       ],
     }).compile();
 

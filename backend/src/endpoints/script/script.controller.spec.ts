@@ -15,12 +15,10 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { ScriptController } from './script.controller';
 import { ScriptService } from './script.service';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { Product } from 'src/schemas/products.schema';
+import { AccessGroup, CompanyCategory, Product } from 'src/entities';
 
 describe('ScriptController', () => {
   let controller: ScriptController;
@@ -30,9 +28,9 @@ describe('ScriptController', () => {
       controllers: [ScriptController],
       providers: [
         ScriptService,
-        { provide: getModelToken(AccessGroup.name), useValue: {} },
-        { provide: getModelToken(CompanyCategory.name), useValue: {} },
-        { provide: getModelToken(Product.name), useValue: {} },
+        { provide: getRepositoryToken(AccessGroup), useValue: {} },
+        { provide: getRepositoryToken(CompanyCategory), useValue: {} },
+        { provide: getRepositoryToken(Product), useValue: {} },
       ],
     }).compile();
 

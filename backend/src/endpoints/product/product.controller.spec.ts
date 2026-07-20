@@ -15,18 +15,20 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { KeycloakService } from '../auth/keycloak.service';
 import { ProductController } from './product.controller';
 import { ProductService } from './product.service';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { Product } from 'src/schemas/products.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
-import { Factory } from 'src/schemas/factory.schema';
+import {
+  Company,
+  CompanyUser,
+  CompanyTwin,
+  CompanyProduct,
+  Product,
+  AccessGroup,
+  UserProductAccessGroup,
+  Factory,
+} from 'src/entities';
 
 describe('ProductController', () => {
   let controller: ProductController;
@@ -36,18 +38,18 @@ describe('ProductController', () => {
       controllers: [ProductController],
       providers: [
         ProductService,
-        { provide: getModelToken(Company.name), useValue: {} },
-        { provide: getModelToken(CompanyUser.name), useValue: {} },
-        { provide: getModelToken(CompanyTwin.name), useValue: {} },
-        { provide: getModelToken(CompanyProduct.name), useValue: {} },
-        { provide: getModelToken(Product.name), useValue: {} },
-        { provide: getModelToken(AccessGroup.name), useValue: {} },
+        { provide: getRepositoryToken(Company), useValue: {} },
+        { provide: getRepositoryToken(CompanyUser), useValue: {} },
+        { provide: getRepositoryToken(CompanyTwin), useValue: {} },
+        { provide: getRepositoryToken(CompanyProduct), useValue: {} },
+        { provide: getRepositoryToken(Product), useValue: {} },
+        { provide: getRepositoryToken(AccessGroup), useValue: {} },
         {
-          provide: getModelToken(UserProductAccessGroup.name),
+          provide: getRepositoryToken(UserProductAccessGroup),
           useValue: {},
         },
-        { provide: getModelToken(Factory.name), useValue: {} },
-        { provide: JwtService, useValue: {} },
+        { provide: getRepositoryToken(Factory), useValue: {} },
+        { provide: KeycloakService, useValue: {} },
       ],
     }).compile();
 

@@ -1,20 +1,23 @@
 #
-# Full-stack compose: MongoDB + a real ICID instance + this registry service,
-# all wired together. This is a superset of docker-compose.yaml — use that
-# one instead if you don't need company creation or certificates and don't
-# want to build ICID's image.
+# Full-stack compose: a real ICID instance (with its own required MongoDB) +
+# this registry service (backed by its own PostgreSQL) — all wired together.
+# This is a superset of docker-compose.yaml — use that one instead if you
+# don't need company creation or certificates and don't want to build ICID's
+# image.
 #
 # Quick start:
 #   docker compose -f docker-compose.full.yaml up --build
 #   curl -X POST http://localhost:4010/script   # seed ICID's taxonomy (once)
 #   curl -X POST http://localhost:4007/script   # seed this service's RBAC/categories (once)
 #
-# See README.md "Verified against a real ICID instance" and "Running the
-# full stack with ICID" for details, including why COMPANY_DEFAULT_CODE must
-# be exactly IFX-COM-NAP and what to do if your Docker daemon blocks
-# build-time network access.
+# See README.md "Running with Docker" for details, including why
+# COMPANY_DEFAULT_CODE must be exactly IFX-COM-NAP and what to do if your
+# Docker daemon blocks build-time network access.
 #
 services:
+  # ICID's own dependency, unrelated to this service's persistence (see
+  # `postgres` below) — ICID is run unmodified from its own repo, so its
+  # MongoDB requirement can't be changed here.
   mongo:
     image: mongo:7
     command: ["--replSet", "rs0", "--bind_ip_all"]
@@ -28,10 +31,10 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: initiates the single-node replica set on first start (idempotent
-  # — safe to leave in place across restarts). This service's own
-  # createCompany uses a MongoDB transaction, which requires a replica set;
-  # ICID doesn't use transactions but shares the same Mongo without issue.
+  # One-shot: initiates the single-node replica set ICID's own transactions
+  # require on first start (idempotent — safe to leave in place across
+  # restarts). This registry service no longer needs a replica set itself
+  # (see `postgres`/`migrate` below) — this sidecar exists purely for ICID.
   mongo-init:
     image: mongo:7
     depends_on:
@@ -51,10 +54,85 @@ services:
           }
         '
 
+  # This registry service's own database — separate from ICID's MongoDB
+  # above.
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=ifric
+      - POSTGRES_PASSWORD=ifric
+      - POSTGRES_DB=ifric_registry_service
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_full_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ifric"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # This app's sole identity provider — see backend/.env.example and
+  # backend/src/common/env.constants.ts. The app itself only talks to
+  # Keycloak once KEYCLOAK_URL etc. are set (below), but this service
+  # comes up unconditionally so it's reachable the moment someone wants to
+  # configure it. Realm/client setup (a confidential "ifric" client with
+  # Direct Access Grants enabled, and a confidential "ifric-admin" client
+  # with its service account granted the realm-management client's
+  # "manage-users" role) is a one-time MANUAL step via the admin console
+  # at http://localhost:8080 — see README.md. Not for production:
+  # hardcoded admin console credentials below. KC_DB points at this same
+  # Postgres instance/database — Keycloak namespaces its own tables, so
+  # there's no collision with this app's tables, and it avoids standing up
+  # a third datastore just for Keycloak's own config store.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev"]
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/ifric_registry_service
+      - KC_DB_USERNAME=ifric
+      - KC_DB_PASSWORD=ifric
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\n\r\n' >&3 && grep 'HTTP/1.1 200' <&3",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  # One-shot: applies TypeORM migrations before ifric-registry-backend
+  # starts (idempotent). Runs from the same image, just with a different
+  # command.
+  migrate:
+    build:
+      context: ./backend
+      network: host
+    command: ["npm", "run", "migration:run"]
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=ifric
+      - DB_PASSWORD=ifric
+      - DB_NAME=ifric_registry_service
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # ICID mints company_ifric_id and issues/verifies certificates — a separate
   # open-source service (https://github.com/IndustryFusion/icidservice), not
-  # vendored into this repo. Built directly from its own repo/Dockerfile via
-  # a git build context, with NO source changes.
+  # vendored into this repo. Pulled as a published, unmodified image — no
+  # build step, no git-context/network dependency at `up` time.
   #
   # Only /company and /script are exercised by this stack. Hedera and
   # certificate-signing dependencies (HBAR_URL, ASSET_VC_TOPIC_ID,
@@ -62,14 +140,7 @@ services:
   # exist on ICID but are intentionally not wired up here; calling them will
   # fail, which is expected.
   icid:
-    build:
-      context: https://github.com/IndustryFusion/icidservice.git#main:backend
-      # Some Docker daemons (notably CI/sandboxed environments) restrict
-      # outbound network access on the default bridge network used during a
-      # build, which makes `npm install` hang. Building with the host
-      # network sidesteps that; it has no effect on how the container runs
-      # afterward (ports/networking below are unaffected).
-      network: host
+    image: ibn40/icid-backend:latest
     ports:
       - "4010:4010"
     environment:
@@ -99,22 +170,43 @@ services:
     ports:
       - "4007:4007"
     environment:
-      - MONGO_URL=mongodb://mongo:27017/ifric-registry-service?replicaSet=rs0
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=ifric
+      - DB_PASSWORD=ifric
+      - DB_NAME=ifric_registry_service
       - PORT=4007
       - CORS_ORIGIN=http://localhost:3000
-      - JWT_SECRET=${JWT_SECRET:-dev-only-jwt-secret-change-me}
       - ICID_SERVICE_BACKEND_URL=http://icid:4010
       - HEDERA_KEY_SECRET=${HEDERA_KEY_SECRET:-dev-only-hedera-key-32-bytes-min}
       # Must match an object-type/subtype pair already seeded in ICID (its
       # own POST /script seeds object_type "COM" with subtype "NAP" for
-      # companies, case-sensitive) — see README "Verified against a real
-      # ICID instance" for how this was confirmed.
+      # companies, case-sensitive) — see README "Running with Docker" for
+      # how this was confirmed.
       - COMPANY_DEFAULT_CODE=IFX-COM-NAP
+      # Keycloak realm/client setup is a one-time MANUAL step (admin
+      # console at http://localhost:8080 — see README.md), so unlike
+      # JWT_SECRET/HEDERA_KEY_SECRET above these have no safe generated
+      # default. Left blank until you've done that setup, this container
+      # will crash-loop on env.constants.ts's fail-fast check — bring the
+      # stack up once to get Keycloak running, do the manual setup, put
+      # the resulting values in a .env file next to this compose file (or
+      # export them), then `docker compose -f docker-compose.full.yaml up`
+      # again.
+      - KEYCLOAK_URL=http://keycloak:8080
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-ifric}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-ifric}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-}
+      - KEYCLOAK_ADMIN_CLIENT_ID=${KEYCLOAK_ADMIN_CLIENT_ID:-ifric-admin}
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
     depends_on:
-      mongo-init:
+      migrate:
         condition: service_completed_successfully
       icid:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
 
 volumes:
   mongo_full_data:
+  postgres_full_data:

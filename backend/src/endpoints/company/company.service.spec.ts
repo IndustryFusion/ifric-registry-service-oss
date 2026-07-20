@@ -15,128 +15,164 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { KeycloakService } from '../auth/keycloak.service';
 import { HttpException } from '@nestjs/common';
 import axios from 'axios';
 import { CompanyService } from './company.service';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
-import { Factory } from 'src/schemas/factory.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { CompanyCategoryMapping } from 'src/schemas/company_category_mapping.schema';
-import { CompanyAsset } from 'src/schemas/company_asset.schema';
-import { CompanyGateWay } from 'src/schemas/company_gateway.schema';
-import { CompanyServer } from 'src/schemas/company_server.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { Product } from 'src/schemas/products.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
+import {
+  Company,
+  CompanyTwin,
+  Factory,
+  CompanyUser,
+  CompanyCategory,
+  CompanyCategoryMapping,
+  CompanyAsset,
+  CompanyGateWay,
+  CompanyServer,
+  CompanyProduct,
+  Product,
+  AccessGroup,
+  UserProductAccessGroup,
+} from 'src/entities';
 import { CertificateService } from '../certificate/certificate.service';
+import { RegisterAuthDto } from '../auth/dto/register-auth.dto';
 
 jest.mock('axios');
 
 describe('CompanyService', () => {
   let service: CompanyService;
-  let companyModel: {
+  let companyRepository: {
     find: jest.Mock;
     findOne: jest.Mock;
-    findOneAndUpdate: jest.Mock;
-    aggregate: jest.Mock;
-  } & jest.Mock;
-  let factoryModel: {
+    update: jest.Mock;
+    delete: jest.Mock;
+  };
+  let factoryRepository: {
     find: jest.Mock;
     findOne: jest.Mock;
-    findOneAndUpdate: jest.Mock;
-    deleteOne: jest.Mock;
-  } & jest.Mock;
-  let companyTwinModel: { find: jest.Mock };
-  let companyAssetModel: jest.Mock;
-  let companyGateWayModel: jest.Mock;
-  let companyServerModel: jest.Mock;
-  let companyCategoryModel: { findOne: jest.Mock };
-  let companyCategoryMappingModel: jest.Mock;
-  let companyProductModel: jest.Mock;
-  let accessGroupModel: { insertMany: jest.Mock };
-  let connection: { startSession: jest.Mock };
+    create: jest.Mock;
+    save: jest.Mock;
+    update: jest.Mock;
+    delete: jest.Mock;
+  };
+  let companyTwinRepository: { find: jest.Mock };
+  let companyAssetRepository: { create: jest.Mock; save: jest.Mock };
+  let companyGateWayRepository: { create: jest.Mock; save: jest.Mock };
+  let companyServerRepository: { create: jest.Mock; save: jest.Mock };
+  let companyCategoryRepository: { find: jest.Mock; findOne: jest.Mock };
+  let companyCategoryMappingRepository: {
+    find: jest.Mock;
+    findOne: jest.Mock;
+    update: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+  };
+  let accessGroupRepository: { find: jest.Mock; create: jest.Mock };
   let certificateService: { verifyAllCompanyCertificate: jest.Mock };
+  let keycloakService: { createUser: jest.Mock };
+  let dataSource: { createQueryRunner: jest.Mock };
+  let mockQueryRunner: any;
+  let idCounter: number;
 
   beforeEach(async () => {
-    companyModel = jest.fn() as any;
-    companyModel.find = jest.fn();
-    companyModel.findOne = jest.fn();
-    companyModel.findOneAndUpdate = jest.fn();
-    companyModel.aggregate = jest.fn();
+    companyRepository = {
+      find: jest.fn(),
+      findOne: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      delete: jest.fn(),
+    };
 
     certificateService = { verifyAllCompanyCertificate: jest.fn() };
+    keycloakService = { createUser: jest.fn().mockResolvedValue('kc-user-1') };
 
-    factoryModel = jest.fn() as any;
-    factoryModel.find = jest.fn();
-    factoryModel.findOne = jest.fn();
-    factoryModel.findOneAndUpdate = jest.fn();
-    factoryModel.deleteOne = jest.fn();
+    factoryRepository = {
+      find: jest.fn(),
+      findOne: jest.fn(),
+      create: jest.fn((x) => x),
+      save: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    };
 
-    companyTwinModel = { find: jest.fn() };
-    companyAssetModel = jest.fn();
-    companyGateWayModel = jest.fn();
-    companyServerModel = jest.fn();
-    companyCategoryModel = { findOne: jest.fn() };
-    companyCategoryMappingModel = jest.fn();
-    companyProductModel = jest.fn();
-    accessGroupModel = { insertMany: jest.fn() };
+    companyTwinRepository = { find: jest.fn() };
+    companyAssetRepository = { create: jest.fn((x) => x), save: jest.fn() };
+    companyGateWayRepository = { create: jest.fn((x) => x), save: jest.fn() };
+    companyServerRepository = { create: jest.fn((x) => x), save: jest.fn() };
+    companyCategoryRepository = { find: jest.fn(), findOne: jest.fn() };
+    companyCategoryMappingRepository = {
+      find: jest.fn(),
+      findOne: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn((x) => x),
+      save: jest.fn(),
+    };
+    accessGroupRepository = { find: jest.fn(), create: jest.fn((x) => x) };
 
-    const session = {
-      withTransaction: jest.fn(async (fn: () => Promise<void>) => fn()),
-      endSession: jest.fn(),
+    idCounter = 0;
+    const mockManager = {
+      create: jest.fn((_entityClass, data) => ({ ...data })),
+      save: jest.fn(async (_entityClass, data) => {
+        if (Array.isArray(data)) {
+          return data.map((d) => ({ ...d, _id: `id-${idCounter++}` }));
+        }
+        return { ...data, _id: `id-${idCounter++}` };
+      }),
+      findOne: jest.fn(),
+    };
+    mockQueryRunner = {
+      connect: jest.fn(),
       startTransaction: jest.fn(),
       commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      isTransactionActive: true,
+      manager: mockManager,
     };
-    connection = { startSession: jest.fn().mockResolvedValue(session) };
+    dataSource = {
+      createQueryRunner: jest.fn().mockReturnValue(mockQueryRunner),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CompanyService,
-        { provide: getModelToken(Company.name), useValue: companyModel },
+        { provide: getRepositoryToken(Company), useValue: companyRepository },
         {
-          provide: getModelToken(CompanyTwin.name),
-          useValue: companyTwinModel,
+          provide: getRepositoryToken(CompanyTwin),
+          useValue: companyTwinRepository,
         },
-        { provide: getModelToken(Factory.name), useValue: factoryModel },
-        { provide: getModelToken(CompanyUser.name), useValue: {} },
+        { provide: getRepositoryToken(Factory), useValue: factoryRepository },
+        { provide: getRepositoryToken(CompanyUser), useValue: {} },
         {
-          provide: getModelToken(CompanyCategory.name),
-          useValue: companyCategoryModel,
-        },
-        {
-          provide: getModelToken(CompanyCategoryMapping.name),
-          useValue: companyCategoryMappingModel,
+          provide: getRepositoryToken(CompanyCategory),
+          useValue: companyCategoryRepository,
         },
         {
-          provide: getModelToken(CompanyAsset.name),
-          useValue: companyAssetModel,
+          provide: getRepositoryToken(CompanyCategoryMapping),
+          useValue: companyCategoryMappingRepository,
         },
         {
-          provide: getModelToken(CompanyGateWay.name),
-          useValue: companyGateWayModel,
+          provide: getRepositoryToken(CompanyAsset),
+          useValue: companyAssetRepository,
         },
         {
-          provide: getModelToken(CompanyServer.name),
-          useValue: companyServerModel,
+          provide: getRepositoryToken(CompanyGateWay),
+          useValue: companyGateWayRepository,
         },
         {
-          provide: getModelToken(CompanyProduct.name),
-          useValue: companyProductModel,
+          provide: getRepositoryToken(CompanyServer),
+          useValue: companyServerRepository,
         },
-        { provide: getModelToken(Product.name), useValue: {} },
+        { provide: getRepositoryToken(CompanyProduct), useValue: {} },
+        { provide: getRepositoryToken(Product), useValue: {} },
         {
-          provide: getModelToken(AccessGroup.name),
-          useValue: accessGroupModel,
+          provide: getRepositoryToken(AccessGroup),
+          useValue: accessGroupRepository,
         },
-        { provide: getModelToken(UserProductAccessGroup.name), useValue: {} },
+        { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
         { provide: CertificateService, useValue: certificateService },
-        { provide: JwtService, useValue: {} },
-        { provide: getConnectionToken(), useValue: connection },
+        { provide: KeycloakService, useValue: keycloakService },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 
@@ -149,24 +185,21 @@ describe('CompanyService', () => {
 
   describe('addStatusDetail', () => {
     it('looks the company up by company_ifric_id, not the removed external_account_ref field', async () => {
-      companyModel.findOneAndUpdate.mockResolvedValue({});
-
       await service.addStatusDetail({
         company_id: 'urn:ifric:ifx-eur-com-own-1',
         status: 'Verified',
       });
 
-      expect(companyModel.findOneAndUpdate).toHaveBeenCalledWith(
+      expect(companyRepository.update).toHaveBeenCalledWith(
         { company_ifric_id: 'urn:ifric:ifx-eur-com-own-1' },
         { company_verified: 'verified' },
-        { new: true },
       );
     });
   });
 
   describe('getFactoryById', () => {
     it('returns a null-factory message when no factory matches', async () => {
-      factoryModel.findOne.mockResolvedValue(null);
+      factoryRepository.findOne.mockResolvedValue(null);
 
       const result = await service.getFactoryById('urn:ifric:missing');
 
@@ -181,7 +214,7 @@ describe('CompanyService', () => {
         factory_id: 'urn:ifric:fac-1',
         location_name: 'Plant 1',
       };
-      factoryModel.findOne.mockResolvedValue(factory);
+      factoryRepository.findOne.mockResolvedValue(factory);
 
       await expect(service.getFactoryById('urn:ifric:fac-1')).resolves.toBe(
         factory,
@@ -191,24 +224,24 @@ describe('CompanyService', () => {
 
   describe('getFactoryOwner', () => {
     it('resolves the factory then looks up its owner company', async () => {
-      factoryModel.findOne.mockResolvedValue({
+      factoryRepository.findOne.mockResolvedValue({
         owner_company_ifric_id: 'urn:ifric:owner-1',
       });
       const owner = { company_ifric_id: 'urn:ifric:owner-1' };
-      companyModel.findOne.mockResolvedValue(owner);
+      companyRepository.findOne.mockResolvedValue(owner);
 
       await expect(service.getFactoryOwner('urn:ifric:fac-1')).resolves.toBe(
         owner,
       );
-      expect(companyModel.findOne).toHaveBeenCalledWith({
-        company_ifric_id: 'urn:ifric:owner-1',
+      expect(companyRepository.findOne).toHaveBeenCalledWith({
+        where: { company_ifric_id: 'urn:ifric:owner-1' },
       });
     });
   });
 
   describe('createFactory', () => {
     it('throws 404 when owner_company_ifric_id does not resolve to a company', async () => {
-      companyModel.find.mockResolvedValue([]);
+      companyRepository.find.mockResolvedValue([]);
 
       await expect(
         service.createFactory({
@@ -219,8 +252,10 @@ describe('CompanyService', () => {
     });
 
     it('throws 409 when the factory_id already exists', async () => {
-      companyModel.find.mockResolvedValue([{ id: 'owner-1' }]);
-      factoryModel.find.mockResolvedValue([{ factory_id: 'urn:ifric:fac-1' }]);
+      companyRepository.find.mockResolvedValue([{ _id: 'owner-1' }]);
+      factoryRepository.find.mockResolvedValue([
+        { factory_id: 'urn:ifric:fac-1' },
+      ]);
 
       await expect(
         service.createFactory({
@@ -231,10 +266,9 @@ describe('CompanyService', () => {
     });
 
     it('creates the factory when the owner exists and the id is unused', async () => {
-      companyModel.find.mockResolvedValue([{ id: 'owner-1' }]);
-      factoryModel.find.mockResolvedValue([]);
-      const save = jest.fn().mockResolvedValue({});
-      factoryModel.mockReturnValue({ save });
+      companyRepository.find.mockResolvedValue([{ _id: 'owner-1' }]);
+      factoryRepository.find.mockResolvedValue([]);
+      factoryRepository.save.mockResolvedValue({});
 
       const result = await service.createFactory({
         factory_id: 'urn:ifric:fac-1',
@@ -242,7 +276,7 @@ describe('CompanyService', () => {
         location_name: 'Plant 1',
       });
 
-      expect(save).toHaveBeenCalled();
+      expect(factoryRepository.save).toHaveBeenCalled();
       expect(result).toEqual({
         success: true,
         status: 201,
@@ -253,7 +287,7 @@ describe('CompanyService', () => {
 
   describe('updateFactory', () => {
     it('throws 404 when the factory does not exist', async () => {
-      factoryModel.findOneAndUpdate.mockResolvedValue(null);
+      factoryRepository.update.mockResolvedValue({ affected: 0 });
 
       await expect(
         service.updateFactory('urn:ifric:missing', { city: 'Munich' }),
@@ -261,16 +295,15 @@ describe('CompanyService', () => {
     });
 
     it('updates the factory when found', async () => {
-      factoryModel.findOneAndUpdate.mockResolvedValue({ city: 'Munich' });
+      factoryRepository.update.mockResolvedValue({ affected: 1 });
 
       const result = await service.updateFactory('urn:ifric:fac-1', {
         city: 'Munich',
       });
 
-      expect(factoryModel.findOneAndUpdate).toHaveBeenCalledWith(
+      expect(factoryRepository.update).toHaveBeenCalledWith(
         { factory_id: 'urn:ifric:fac-1' },
         { city: 'Munich' },
-        { new: true },
       );
       expect(result.status).toBe(204);
     });
@@ -278,23 +311,23 @@ describe('CompanyService', () => {
 
   describe('deleteFactory', () => {
     it('throws 409 when a company twin still references the factory', async () => {
-      companyTwinModel.find.mockResolvedValue([
+      companyTwinRepository.find.mockResolvedValue([
         { factory_id: 'urn:ifric:fac-1' },
       ]);
 
       await expect(service.deleteFactory('urn:ifric:fac-1')).rejects.toThrow(
         HttpException,
       );
-      expect(factoryModel.deleteOne).not.toHaveBeenCalled();
+      expect(factoryRepository.delete).not.toHaveBeenCalled();
     });
 
     it('deletes the factory when no twin references it', async () => {
-      companyTwinModel.find.mockResolvedValue([]);
-      factoryModel.deleteOne.mockResolvedValue({ deletedCount: 1 });
+      companyTwinRepository.find.mockResolvedValue([]);
+      factoryRepository.delete.mockResolvedValue({ affected: 1 });
 
       await service.deleteFactory('urn:ifric:fac-1');
 
-      expect(factoryModel.deleteOne).toHaveBeenCalledWith({
+      expect(factoryRepository.delete).toHaveBeenCalledWith({
         factory_id: 'urn:ifric:fac-1',
       });
     });
@@ -302,11 +335,11 @@ describe('CompanyService', () => {
 
   describe('createCompanyAsset', () => {
     beforeEach(() => {
-      companyModel.find.mockResolvedValue([{ id: 'company-1' }]);
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
     });
 
     it('throws 409 when the company does not exist', async () => {
-      companyModel.find.mockResolvedValue([]);
+      companyRepository.find.mockResolvedValue([]);
 
       await expect(
         service.createCompanyAsset({
@@ -351,12 +384,11 @@ describe('CompanyService', () => {
           company_ifric_id: 'urn:ifric:company-1',
         }),
       ).rejects.toThrow(HttpException);
-      expect(companyServerModel).not.toHaveBeenCalled();
+      expect(companyServerRepository.create).not.toHaveBeenCalled();
     });
 
     it('creates a CompanyAsset when type is "asset"', async () => {
-      const save = jest.fn().mockResolvedValue({});
-      companyAssetModel.mockReturnValue({ save });
+      companyAssetRepository.save.mockResolvedValue({});
 
       await service.createCompanyAsset({
         type: 'asset',
@@ -364,17 +396,17 @@ describe('CompanyService', () => {
         asset_ifric_id: 'urn:asset:1',
       });
 
-      expect(companyAssetModel).toHaveBeenCalledWith({
+      expect(companyAssetRepository.create).toHaveBeenCalledWith({
         company_id: 'company-1',
         asset_ifric_id: 'urn:asset:1',
       });
-      expect(companyGateWayModel).not.toHaveBeenCalled();
-      expect(companyServerModel).not.toHaveBeenCalled();
+      expect(companyGateWayRepository.create).not.toHaveBeenCalled();
+      expect(companyServerRepository.create).not.toHaveBeenCalled();
     });
   });
 
   describe('createCompany', () => {
-    const baseDto = {
+    const baseDto: RegisterAuthDto = {
       industry: 'Manufacturing',
       company_name: 'Acme Co',
       registration_number: 'REG-1',
@@ -397,34 +429,27 @@ describe('CompanyService', () => {
     };
 
     beforeEach(() => {
-      companyModel.find.mockResolvedValue([]); // no existing company by email/name
-      companyModel.mockReturnValue({
-        save: jest.fn().mockResolvedValue({ id: 'company-mongo-id' }),
-      });
-      companyCategoryModel.findOne.mockReturnValue({
-        session: jest.fn().mockResolvedValue({ id: 'category-1' }),
-      });
-      companyCategoryMappingModel.mockReturnValue({
-        save: jest.fn().mockResolvedValue({ id: 'mapping-1' }),
-      });
-      let productSeq = 0;
-      companyProductModel.mockImplementation(() => ({
-        save: jest
-          .fn()
-          .mockResolvedValue({ id: `company-product-${productSeq++}` }),
-      }));
-      accessGroupModel.insertMany.mockResolvedValue([
-        { id: 'ag-read-only' },
-        { id: 'ag-admin' },
-      ]);
+      companyRepository.find.mockResolvedValue([]); // no existing company by email/name
       (axios.post as jest.Mock).mockResolvedValue({
         data: { status: '201', urn_id: 'urn:ifric:new-company-1' },
       });
-      jest.spyOn(service as any, 'createAdminUser').mockResolvedValue({
-        status: 201,
-        userId: 'user-1',
-        productAccessGroupIds: [],
-      });
+      mockQueryRunner.manager.findOne.mockImplementation(
+        (entityClass: any, options: any) => {
+          if (entityClass === CompanyCategory) {
+            return Promise.resolve({
+              _id: 'category-1',
+              category_name: options.where.category_name,
+            });
+          }
+          if (entityClass === CompanyUser) {
+            return Promise.resolve(null); // no existing admin user
+          }
+          if (entityClass === AccessGroup) {
+            return Promise.resolve({ _id: 'ag-admin', group_name: 'admin' });
+          }
+          return Promise.resolve(null);
+        },
+      );
     });
 
     it('returns company_ifric_id in the success response', async () => {
@@ -435,6 +460,7 @@ describe('CompanyService', () => {
         status: 201,
         company_ifric_id: 'urn:ifric:new-company-1',
       });
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
     });
 
     it('links default products directly by product_ifric_id, with no local Product catalog lookup', async () => {
@@ -443,23 +469,164 @@ describe('CompanyService', () => {
       // Every DEFAULT_PRODUCT_NAMES entry is linked without ever querying a
       // Product catalog collection — creation cannot fail on missing seed
       // data, unlike the old behavior which threw INTERNAL_SERVER_ERROR.
-      expect(companyProductModel).toHaveBeenCalledWith(
+      expect(mockQueryRunner.manager.create).toHaveBeenCalledWith(
+        CompanyProduct,
         expect.objectContaining({
-          company_id: 'company-mongo-id',
           product_ifric_id: expect.any(String),
         }),
       );
-      expect(companyProductModel).not.toHaveBeenCalledWith(
+      expect(mockQueryRunner.manager.create).not.toHaveBeenCalledWith(
+        CompanyProduct,
         expect.objectContaining({ product_id: expect.anything() }),
+      );
+    });
+
+    it('provisions the admin user in Keycloak instead of a local hash/refresh token', async () => {
+      await service.createCompany({ ...baseDto });
+
+      expect(keycloakService.createUser).toHaveBeenCalledWith(
+        baseDto.email,
+        baseDto.admin_name,
+        expect.any(String),
+      );
+      expect(mockQueryRunner.manager.create).not.toHaveBeenCalledWith(
+        CompanyUser,
+        expect.objectContaining({ user_password: expect.anything() }),
+      );
+      expect(mockQueryRunner.manager.create).not.toHaveBeenCalledWith(
+        CompanyUser,
+        expect.objectContaining({ jwt_token: expect.anything() }),
+      );
+    });
+
+    it('rolls back the whole transaction and compensates ICID when the category is invalid', async () => {
+      mockQueryRunner.manager.findOne.mockImplementation((entityClass: any) => {
+        if (entityClass === CompanyCategory) return Promise.resolve(null);
+        return Promise.resolve(null);
+      });
+
+      await expect(service.createCompany({ ...baseDto })).rejects.toThrow(
+        HttpException,
+      );
+
+      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(axios.delete).toHaveBeenCalledWith(
+        expect.stringContaining('urn:ifric:new-company-1'),
+        expect.any(Object),
       );
     });
   });
 
-  describe('getAllCompanies', () => {
-    const aggregateResult = [{ company_ifric_id: 'urn:ifric:company-1' }];
+  describe('updateCompany', () => {
+    const mockCompany = {
+      _id: 'company-1',
+      company_ifric_id: 'urn:ifric:company-1',
+    };
 
     beforeEach(() => {
-      companyModel.aggregate.mockResolvedValue(aggregateResult);
+      companyRepository.find.mockResolvedValue([mockCompany]);
+    });
+
+    it('re-points an existing category mapping when company_category changes', async () => {
+      companyCategoryRepository.findOne.mockResolvedValue({
+        _id: 'cat-machine-builder',
+        category_name: 'machine_builder',
+      });
+      companyCategoryMappingRepository.findOne.mockResolvedValue({
+        _id: 'mapping-1',
+        category_id: 'cat-manufacturer',
+        company_id: 'company-1',
+      });
+
+      await service.updateCompany('urn:ifric:company-1', {
+        company_category: 'machine_builder',
+      } as unknown as RegisterAuthDto);
+
+      expect(companyCategoryMappingRepository.update).toHaveBeenCalledWith(
+        { _id: 'mapping-1' },
+        { category_id: 'cat-machine-builder' },
+      );
+      expect(companyCategoryMappingRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('creates a mapping row when the company has none yet', async () => {
+      companyCategoryRepository.findOne.mockResolvedValue({
+        _id: 'cat-machine-builder',
+        category_name: 'machine_builder',
+      });
+      companyCategoryMappingRepository.findOne.mockResolvedValue(null);
+
+      await service.updateCompany('urn:ifric:company-1', {
+        company_category: 'machine_builder',
+      } as unknown as RegisterAuthDto);
+
+      expect(companyCategoryMappingRepository.save).toHaveBeenCalledWith({
+        category_id: 'cat-machine-builder',
+        company_id: 'company-1',
+      });
+    });
+
+    it('rejects an unknown company_category without touching the mapping', async () => {
+      companyCategoryRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateCompany('urn:ifric:company-1', {
+          company_category: 'not_a_real_category',
+        } as unknown as RegisterAuthDto),
+      ).rejects.toThrow(HttpException);
+
+      expect(companyCategoryMappingRepository.update).not.toHaveBeenCalled();
+      expect(companyCategoryMappingRepository.save).not.toHaveBeenCalled();
+      expect(companyRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('skips category handling entirely when company_category is omitted', async () => {
+      await service.updateCompany('urn:ifric:company-1', {
+        company_name: 'Renamed Co',
+      } as unknown as RegisterAuthDto);
+
+      expect(companyCategoryRepository.findOne).not.toHaveBeenCalled();
+      expect(companyCategoryMappingRepository.findOne).not.toHaveBeenCalled();
+      expect(companyRepository.update).toHaveBeenCalledWith(
+        { _id: 'company-1' },
+        { company_name: 'Renamed Co' },
+      );
+    });
+  });
+
+  describe('getCompanyCategories', () => {
+    it('returns every seeded company category row', async () => {
+      const categories = [
+        { _id: 'cat-1', category_name: 'manufacturer' },
+        { _id: 'cat-2', category_name: 'machine_builder' },
+        { _id: 'cat-3', category_name: 'factory_owner' },
+      ];
+      companyCategoryRepository.find.mockResolvedValue(categories);
+
+      const result = await service.getCompanyCategories();
+
+      expect(companyCategoryRepository.find).toHaveBeenCalledWith();
+      expect(result).toEqual(categories);
+    });
+  });
+
+  describe('getAllCompanies', () => {
+    const mockCompany = {
+      _id: 'company-1',
+      company_ifric_id: 'urn:ifric:company-1',
+      company_name: 'Acme',
+      company_image: null,
+      address_1: 'Addr 1',
+      city: 'Berlin',
+      country: 'Germany',
+      industry: 'Manufacturing',
+      company_verified: 'new',
+    };
+
+    beforeEach(() => {
+      companyRepository.find.mockResolvedValue([mockCompany]);
+      companyCategoryMappingRepository.find.mockResolvedValue([]);
+      companyCategoryRepository.find.mockResolvedValue([]);
     });
 
     it('skips the certificate check entirely when certificates are disabled', async () => {
@@ -471,7 +638,10 @@ describe('CompanyService', () => {
         certificateService.verifyAllCompanyCertificate,
       ).not.toHaveBeenCalled();
       expect(result).toEqual([
-        { company_ifric_id: 'urn:ifric:company-1', company_cert: false },
+        expect.objectContaining({
+          company_ifric_id: 'urn:ifric:company-1',
+          company_cert: false,
+        }),
       ]);
     });
 
@@ -487,7 +657,10 @@ describe('CompanyService', () => {
         certificateService.verifyAllCompanyCertificate,
       ).toHaveBeenCalledWith(['urn:ifric:company-1']);
       expect(result).toEqual([
-        { company_ifric_id: 'urn:ifric:company-1', company_cert: true },
+        expect.objectContaining({
+          company_ifric_id: 'urn:ifric:company-1',
+          company_cert: true,
+        }),
       ]);
     });
 
@@ -500,8 +673,46 @@ describe('CompanyService', () => {
       const result = await service.getAllCompanies();
 
       expect(result).toEqual([
-        { company_ifric_id: 'urn:ifric:company-1', company_cert: false },
+        expect.objectContaining({
+          company_ifric_id: 'urn:ifric:company-1',
+          company_cert: false,
+        }),
       ]);
+    });
+  });
+
+  describe('deleteCompany', () => {
+    it('fetches users before deleting them so UserProductAccessGroup rows are actually cascade-deleted (bug fix)', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      const companyUserRepo = (service as any).companyUserRepository;
+      companyUserRepo.find = jest
+        .fn()
+        .mockResolvedValue([{ _id: 'user-1' }, { _id: 'user-2' }]);
+      companyUserRepo.delete = jest.fn();
+      const userProductAccessGroupRepo = (service as any)
+        .userProductAccessGroupRepository;
+      userProductAccessGroupRepo.delete = jest.fn();
+      (service as any).companyProductRepository.delete = jest.fn();
+      (service as any).accessGroupRepository.delete = jest.fn();
+      (service as any).companyCategoryMappingRepository.delete = jest.fn();
+      (service as any).companyAssetRepository.delete = jest.fn();
+      (service as any).companyGateWayRepository.delete = jest.fn();
+      (service as any).companyServerRepository.delete = jest.fn();
+      companyRepository.delete.mockResolvedValue({ affected: 1 });
+
+      await service.deleteCompany('urn:ifric:company-1');
+
+      expect(userProductAccessGroupRepo.delete).toHaveBeenCalledWith({
+        user_id: 'user-1',
+      });
+      expect(userProductAccessGroupRepo.delete).toHaveBeenCalledWith({
+        user_id: 'user-2',
+      });
+      // Fixed: deletes by the resolved internal _id, not the raw
+      // company_ifric_id parameter.
+      expect(companyRepository.delete).toHaveBeenCalledWith({
+        _id: 'company-1',
+      });
     });
   });
 });

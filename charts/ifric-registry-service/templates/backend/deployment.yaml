@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-backend
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ifric-registry-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      # Compose orders things with `depends_on: condition:
+      # service_completed_successfully` (Postgres up -> migrations applied
+      # -> backend starts). Helm hooks can't reproduce that ordering
+      # cleanly (pre-install runs before the Postgres StatefulSet template
+      # even exists; post-install runs after this Deployment is already
+      # scheduling pods) — so migrations run here instead, as
+      # initContainers on every backend pod. TypeORM tracks applied
+      # migrations in its own table and wraps each one in a transaction,
+      # so redundant runs across replicas on scale-up are safe.
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "ifric-registry-service.postgresHost" . }} -p {{ .Values.postgres.service.port }} -U {{ .Values.postgres.auth.user }}; do
+                echo "waiting for postgres..."
+                sleep 2
+              done
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["npm", "run", "migration:run"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "ifric-registry-service.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ifric-registry-service.secretName" . }}
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ifric-registry-service.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ifric-registry-service.secretName" . }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

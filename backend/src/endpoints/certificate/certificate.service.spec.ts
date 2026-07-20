@@ -15,32 +15,28 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { HttpException } from '@nestjs/common';
 import { CertificateService } from './certificate.service';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { Certificate } from 'src/schemas/certificate.schema';
+import { Company, CompanyUser, Certificate } from 'src/entities';
 
 describe('CertificateService', () => {
   let service: CertificateService;
-  let companyModel: { find: jest.Mock };
-  let certificateModel: { find: jest.Mock };
+  let companyRepository: { find: jest.Mock };
+  let certificateRepository: { find: jest.Mock };
 
   beforeEach(async () => {
-    companyModel = { find: jest.fn() };
-    certificateModel = {
-      find: jest.fn().mockReturnValue({ sort: jest.fn() }),
-    };
+    companyRepository = { find: jest.fn() };
+    certificateRepository = { find: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CertificateService,
-        { provide: getModelToken(Company.name), useValue: companyModel },
-        { provide: getModelToken(CompanyUser.name), useValue: {} },
+        { provide: getRepositoryToken(Company), useValue: companyRepository },
+        { provide: getRepositoryToken(CompanyUser), useValue: {} },
         {
-          provide: getModelToken(Certificate.name),
-          useValue: certificateModel,
+          provide: getRepositoryToken(Certificate),
+          useValue: certificateRepository,
         },
       ],
     }).compile();
@@ -54,10 +50,8 @@ describe('CertificateService', () => {
 
   describe('revealPrivateKey', () => {
     it('throws a clean 404 when the company has no certificate at all', async () => {
-      companyModel.find.mockResolvedValue([{ id: 'company-1' }]);
-      certificateModel.find.mockReturnValue({
-        sort: jest.fn().mockResolvedValue([]),
-      });
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      certificateRepository.find.mockResolvedValue([]);
 
       await expect(
         service.revealPrivateKey('urn:ifric:company-1'),
@@ -67,10 +61,8 @@ describe('CertificateService', () => {
 
   describe('deletePrivateKey', () => {
     it('throws a clean 404 when the company has no certificate at all', async () => {
-      companyModel.find.mockResolvedValue([{ id: 'company-1' }]);
-      certificateModel.find.mockReturnValue({
-        sort: jest.fn().mockResolvedValue([]),
-      });
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      certificateRepository.find.mockResolvedValue([]);
 
       await expect(
         service.deletePrivateKey('urn:ifric:company-1'),

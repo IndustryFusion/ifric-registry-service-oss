@@ -1,0 +1,85 @@
+{{- if .Values.icid.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-icid
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: icid
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ifric-registry-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: icid
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: icid
+    spec:
+      # Mirrors docker-compose.full.yaml's mongo-init sidecar: ICID's
+      # MongoDB is started in --replSet mode, so something has to initiate
+      # the single-node replica set before ICID itself can connect. Done
+      # here as initContainers (idempotent — safe on every pod restart)
+      # rather than a separate Job, for the same Helm-hook-ordering reasons
+      # documented on the backend Deployment.
+      initContainers:
+        - name: wait-for-mongo
+          image: "{{ .Values.icid.mongodb.image.repository }}:{{ .Values.icid.mongodb.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until mongosh --host {{ include "ifric-registry-service.icidMongoHost" . }} --quiet --eval "db.adminCommand('ping').ok"; do
+                echo "waiting for icid mongodb..."
+                sleep 2
+              done
+        - name: init-mongo-replicaset
+          image: "{{ .Values.icid.mongodb.image.repository }}:{{ .Values.icid.mongodb.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              mongosh --host {{ include "ifric-registry-service.icidMongoHost" . }} --quiet --eval '
+                try {
+                  rs.status();
+                  print("replica set already initiated");
+                } catch (e) {
+                  rs.initiate({_id: "rs0", members: [{_id: 0, host: "{{ include "ifric-registry-service.icidMongoHost" . }}:{{ .Values.icid.mongodb.service.port }}"}]});
+                  print("replica set initiated");
+                }
+              '
+      containers:
+        - name: icid
+          image: "{{ .Values.icid.image.repository }}:{{ .Values.icid.image.tag }}"
+          imagePullPolicy: {{ .Values.icid.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.icid.service.port }}
+          env:
+            - name: MONGO_URL
+              value: {{ printf "mongodb://%s:%v/icid-service?replicaSet=rs0" (include "ifric-registry-service.icidMongoHost" .) .Values.icid.mongodb.service.port | quote }}
+            - name: CORS_ORIGIN
+              value: {{ .Values.icid.corsOrigin | quote }}
+            - name: IFRIC_NAMESPACE
+              value: {{ .Values.icid.ifricNamespace | quote }}
+            # Skips ICID's Vault-secrets-fetch entrypoint script so it boots
+            # straight from the env vars above instead of requiring a
+            # running Vault instance — a runtime flag on ICID's own,
+            # unmodified Dockerfile CMD logic.
+            - name: ENV
+              value: prod
+          readinessProbe:
+            httpGet:
+              path: /api-docs-json
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api-docs-json
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+{{- end }}

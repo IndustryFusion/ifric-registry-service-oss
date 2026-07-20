@@ -18,20 +18,10 @@ import * as dotenv from 'dotenv';
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { MongooseModule } from '@nestjs/mongoose';
-import {
-  CompanyCategorySchema,
-  CompanyCategory,
-} from './schemas/company_category.schema';
-import {
-  AccessGroupSchema,
-  AccessGroup,
-} from 'src/schemas/access_group.schema';
-import { Product, ProductSchema } from './schemas/products.schema';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { envConstants } from './common/env.constants';
 import { ScriptController } from './endpoints/script/script.controller';
 import { ScriptService } from './endpoints/script/script.service';
-import { JwtModule } from '@nestjs/jwt';
-import { jwtConstants } from './endpoints/auth/constants';
 import { AuthModule } from './endpoints/auth/auth.module';
 import { CertificateModule } from './endpoints/certificate/certificate.module';
 import { CacheInterceptor, CacheModule } from '@nestjs/cache-manager';
@@ -39,29 +29,27 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CompanyModule } from './endpoints/company/company.module';
 import { ProductModule } from './endpoints/product/product.module';
+import { entities, AccessGroup, CompanyCategory, Product } from './entities';
 
 dotenv.config();
-const mongoURI = process.env.MONGO_URL;
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
-    MongooseModule.forRoot(mongoURI),
+    TypeOrmModule.forRoot({
+      type: 'postgres',
+      host: envConstants.dbHost,
+      port: envConstants.dbPort,
+      username: envConstants.dbUser,
+      password: envConstants.dbPassword,
+      database: envConstants.dbName,
+      entities,
+      synchronize: false,
+    }),
     // Only what ScriptService/AppController need directly — every other
     // module registers its own models via its own forFeature (see
     // AuthModule, CompanyModule, ProductModule, CertificateModule).
-    MongooseModule.forFeature([
-      { name: CompanyCategory.name, schema: CompanyCategorySchema },
-      { name: AccessGroup.name, schema: AccessGroupSchema },
-      { name: Product.name, schema: ProductSchema },
-    ]),
-    // No global signOptions/expiresIn — every token-minting call site
-    // (AuthService.generateAccessToken/signRefreshToken) sets its own TTL
-    // explicitly, since access and refresh tokens have different lifetimes.
-    JwtModule.register({
-      global: true,
-      secret: jwtConstants.secret,
-    }),
+    TypeOrmModule.forFeature([AccessGroup, CompanyCategory, Product]),
     CacheModule.register({
       isGlobal: true,
       ttl: 600,

@@ -20,21 +20,18 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { jwtConstants } from './constants';
 import { Request } from 'express';
+import { KeycloakService } from './keycloak.service';
 
 /**
- * Verifies the bearer JWT's signature against JWT_SECRET and that it's an
- * access token (`type: 'access'`), not a refresh token. This is a stateless
- * check — no database round trip — so a token remains valid for its full
- * lifetime even if the underlying session is later revoked via /auth/logout
- * (which only invalidates future refreshes, see AuthService.logOut). On
- * success, attaches the decoded payload to `request.user`.
+ * Verifies the bearer token against Keycloak's realm signing keys (JWKS,
+ * cached — see KeycloakService.verifyAccessToken), Keycloak being this
+ * app's sole identity provider. On success, attaches the decoded payload to
+ * `request.user`.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private jwtService: JwtService) {}
+  constructor(private keycloakService: KeycloakService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -43,21 +40,8 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException();
     }
 
-    try {
-      const payload = await this.jwtService.verifyAsync(token, {
-        secret: jwtConstants.secret,
-      });
-
-      if (payload.type !== 'access') {
-        throw new UnauthorizedException();
-      }
-
-      // 💡 We're assigning the payload to the request object here
-      // so that we can access it in our route handlers
-      request['user'] = payload;
-    } catch {
-      throw new UnauthorizedException();
-    }
+    const payload = await this.keycloakService.verifyAccessToken(token);
+    request['user'] = payload;
     return true;
   }
 

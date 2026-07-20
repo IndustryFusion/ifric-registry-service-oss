@@ -1,14 +1,16 @@
 # Ifric Registry Service — backend
 
-NestJS + MongoDB backend. See the [root README](../README.md) for what this
-service is, architecture notes, and how the Auth/Company/Product/Certificate
-controllers and the ICID integration fit together.
+NestJS + PostgreSQL backend, authenticated via Keycloak. See the
+[root README](../README.md) for what this service is, architecture notes,
+and how the Auth/Company/Product/Certificate controllers and the
+Keycloak/ICID integrations fit together.
 
 ## Quick start
 
 ```bash
 cp .env.example .env   # fill in the required values — see comments in the file
 npm install
+npm run migration:run  # applies the TypeORM schema to your PostgreSQL database
 npm run start:dev
 ```
 

@@ -15,23 +15,25 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { KeycloakService } from '../auth/keycloak.service';
 import { CompanyController } from './company.controller';
 import { CompanyService } from './company.service';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
-import { Factory } from 'src/schemas/factory.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { CompanyCategoryMapping } from 'src/schemas/company_category_mapping.schema';
-import { CompanyAsset } from 'src/schemas/company_asset.schema';
-import { CompanyGateWay } from 'src/schemas/company_gateway.schema';
-import { CompanyServer } from 'src/schemas/company_server.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { Product } from 'src/schemas/products.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
+import {
+  Company,
+  CompanyTwin,
+  Factory,
+  CompanyUser,
+  CompanyCategory,
+  CompanyCategoryMapping,
+  CompanyAsset,
+  CompanyGateWay,
+  CompanyServer,
+  CompanyProduct,
+  Product,
+  AccessGroup,
+  UserProductAccessGroup,
+} from 'src/entities';
 import { CertificateService } from '../certificate/certificate.service';
 
 describe('CompanyController', () => {
@@ -42,22 +44,22 @@ describe('CompanyController', () => {
       controllers: [CompanyController],
       providers: [
         CompanyService,
-        { provide: getModelToken(Company.name), useValue: {} },
-        { provide: getModelToken(CompanyTwin.name), useValue: {} },
-        { provide: getModelToken(Factory.name), useValue: {} },
-        { provide: getModelToken(CompanyUser.name), useValue: {} },
-        { provide: getModelToken(CompanyCategory.name), useValue: {} },
-        { provide: getModelToken(CompanyCategoryMapping.name), useValue: {} },
-        { provide: getModelToken(CompanyAsset.name), useValue: {} },
-        { provide: getModelToken(CompanyGateWay.name), useValue: {} },
-        { provide: getModelToken(CompanyServer.name), useValue: {} },
-        { provide: getModelToken(CompanyProduct.name), useValue: {} },
-        { provide: getModelToken(Product.name), useValue: {} },
-        { provide: getModelToken(AccessGroup.name), useValue: {} },
-        { provide: getModelToken(UserProductAccessGroup.name), useValue: {} },
+        { provide: getRepositoryToken(Company), useValue: {} },
+        { provide: getRepositoryToken(CompanyTwin), useValue: {} },
+        { provide: getRepositoryToken(Factory), useValue: {} },
+        { provide: getRepositoryToken(CompanyUser), useValue: {} },
+        { provide: getRepositoryToken(CompanyCategory), useValue: {} },
+        { provide: getRepositoryToken(CompanyCategoryMapping), useValue: {} },
+        { provide: getRepositoryToken(CompanyAsset), useValue: {} },
+        { provide: getRepositoryToken(CompanyGateWay), useValue: {} },
+        { provide: getRepositoryToken(CompanyServer), useValue: {} },
+        { provide: getRepositoryToken(CompanyProduct), useValue: {} },
+        { provide: getRepositoryToken(Product), useValue: {} },
+        { provide: getRepositoryToken(AccessGroup), useValue: {} },
+        { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
         { provide: CertificateService, useValue: {} },
-        { provide: JwtService, useValue: {} },
-        { provide: getConnectionToken(), useValue: {} },
+        { provide: KeycloakService, useValue: {} },
+        { provide: getDataSourceToken(), useValue: {} },
       ],
     }).compile();
 
@@ -81,6 +83,21 @@ describe('CompanyController', () => {
         'urn:ifric:owner-1',
       );
       expect(result).toEqual([{ factory_id: 'f1' }]);
+    });
+  });
+
+  describe('getCompanyCategories', () => {
+    it('delegates to CompanyService.getCompanyCategories', async () => {
+      const categories = [{ _id: 'cat-1', category_name: 'manufacturer' }];
+      const companyService = {
+        getCompanyCategories: jest.fn().mockResolvedValue(categories),
+      };
+      (controller as any).companyService = companyService;
+
+      const result = await controller.getCompanyCategories();
+
+      expect(companyService.getCompanyCategories).toHaveBeenCalledWith();
+      expect(result).toEqual(categories);
     });
   });
 

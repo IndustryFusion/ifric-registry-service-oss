@@ -5,7 +5,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,30 +14,11 @@
 // limitations under the License.
 //
 
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { Column, Entity } from 'typeorm';
+import { BaseEntity } from '../database/base.entity';
 
-export type AccessGroupDocument = HydratedDocument<AccessGroup>;
-
-@Schema()
-export class AccessGroup {
-  @Prop()
-  company_id: string;
-
-  @Prop()
-  group_name: string;
-
-  @Prop()
-  create: boolean;
-
-  @Prop()
-  read: boolean;
-
-  @Prop()
-  update: boolean;
-
-  @Prop()
-  delete: boolean;
+@Entity('products')
+export class Product extends BaseEntity {
+  @Column({ type: 'varchar', nullable: true })
+  product_name: string;
 }
-
-export const AccessGroupSchema = SchemaFactory.createForClass(AccessGroup);

@@ -14,15 +14,20 @@
 // limitations under the License.
 //
 
+// dotenv.config() must run before AppModule (or anything it transitively
+// imports, e.g. common/env.constants.ts) is required — those read
+// process.env at module-load time, so loading them first would see an
+// empty environment even with a real backend/.env file present. Keep this
+// import+call pair first, ahead of every other import in this file.
 import * as dotenv from 'dotenv';
+dotenv.config();
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import * as cors from 'cors';
 import * as cookieParser from 'cookie-parser';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
-
-dotenv.config();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -49,8 +54,11 @@ async function bootstrap() {
         'registry service, split into Auth (session/identity), Company ' +
         '(company CRUD, access groups, physical assets), Product (product ' +
         'catalog, digital twins), Certificate, and Script (one-time seed ' +
-        'data) controllers. All use a single bearer-JWT auth mechanism ' +
-        '(POST /auth/login, refreshed via POST /auth/refresh). Certificate ' +
+        'data) controllers. Authentication has no built-in implementation ' +
+        'of its own — Keycloak is the sole identity provider (POST ' +
+        '/auth/login, refreshed via POST /auth/refresh, both backed by ' +
+        "Keycloak's token endpoint); every bearer token below is issued " +
+        'and verified by Keycloak, not signed locally. Certificate ' +
         'issuance and company_ifric_id minting integrate with an external ' +
         'open-source ICID-compatible service (see README.md).',
     )

@@ -15,20 +15,21 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { JwtService } from '@nestjs/jwt';
+import { KeycloakService } from './keycloak.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { CompanyCategoryMapping } from 'src/schemas/company_category_mapping.schema';
-import { Product } from 'src/schemas/products.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
+import {
+  Company,
+  CompanyUser,
+  CompanyCategory,
+  AccessGroup,
+  CompanyCategoryMapping,
+  UserProductAccessGroup,
+  CompanyProduct,
+  CompanyTwin,
+} from 'src/entities';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -39,16 +40,15 @@ describe('AuthController', () => {
       providers: [
         AuthService,
         { provide: CACHE_MANAGER, useValue: {} },
-        { provide: getModelToken(Company.name), useValue: {} },
-        { provide: getModelToken(CompanyUser.name), useValue: {} },
-        { provide: getModelToken(CompanyCategory.name), useValue: {} },
-        { provide: getModelToken(AccessGroup.name), useValue: {} },
-        { provide: getModelToken(CompanyCategoryMapping.name), useValue: {} },
-        { provide: getModelToken(Product.name), useValue: {} },
-        { provide: getModelToken(UserProductAccessGroup.name), useValue: {} },
-        { provide: getModelToken(CompanyProduct.name), useValue: {} },
-        { provide: getModelToken(CompanyTwin.name), useValue: {} },
-        { provide: JwtService, useValue: {} },
+        { provide: getRepositoryToken(Company), useValue: {} },
+        { provide: getRepositoryToken(CompanyUser), useValue: {} },
+        { provide: getRepositoryToken(CompanyCategory), useValue: {} },
+        { provide: getRepositoryToken(AccessGroup), useValue: {} },
+        { provide: getRepositoryToken(CompanyCategoryMapping), useValue: {} },
+        { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
+        { provide: getRepositoryToken(CompanyProduct), useValue: {} },
+        { provide: getRepositoryToken(CompanyTwin), useValue: {} },
+        { provide: KeycloakService, useValue: {} },
       ],
     }).compile();
 
@@ -64,6 +64,7 @@ describe('AuthController', () => {
       const authService = {
         refreshAccessToken: jest.fn().mockResolvedValue({
           access_token: 'new-token',
+          refresh_token: 'rotated-refresh-token',
         }),
       };
       (controller as any).authService = authService;
@@ -73,7 +74,25 @@ describe('AuthController', () => {
       expect(authService.refreshAccessToken).toHaveBeenCalledWith(
         'a-refresh-token',
       );
-      expect(result).toEqual({ access_token: 'new-token' });
+      expect(result).toEqual({
+        access_token: 'new-token',
+        refresh_token: 'rotated-refresh-token',
+      });
+    });
+  });
+
+  describe('logOut', () => {
+    it('delegates to AuthService.logOut with the optional refresh_token', async () => {
+      const authService = {
+        logOut: jest.fn().mockResolvedValue({ success: true, status: 200 }),
+      };
+      (controller as any).authService = authService;
+      const data = { email: 'user@example.com', refresh_token: 'a-token' };
+
+      const result = await controller.logOut(data);
+
+      expect(authService.logOut).toHaveBeenCalledWith(data);
+      expect(result).toEqual({ success: true, status: 200 });
     });
   });
 });

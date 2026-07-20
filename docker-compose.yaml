@@ -1,42 +1,64 @@
 services:
-  mongo:
-    image: mongo:7
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=ifric
+      - POSTGRES_PASSWORD=ifric
+      - POSTGRES_DB=ifric_registry_service
     ports:
-      - "27017:27017"
+      - "5432:5432"
     volumes:
-      - mongo_data:/data/db
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD-SHELL", "pg_isready -U ifric"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # One-shot: initiates the single-node replica set on first start (idempotent
-  # — safe to leave in place across restarts). CompanyService.createCompany
-  # uses a MongoDB transaction (session.withTransaction), which only works
-  # against a replica set member, not a standalone mongod — this is required,
-  # not optional, for company creation to work through this compose file.
-  mongo-init:
-    image: mongo:7
+  # This app's sole identity provider — see backend/.env.example and
+  # backend/src/common/env.constants.ts. The app itself only talks to
+  # Keycloak once KEYCLOAK_URL etc. are set in backend/.env, but this
+  # service comes up unconditionally so it's reachable the moment someone
+  # wants to configure it. Realm/client setup (a confidential "ifric"
+  # client with Direct Access Grants enabled, and a confidential
+  # "ifric-admin" client with its service account granted the
+  # realm-management client's "manage-users" role) is a one-time MANUAL
+  # step via the admin console at http://localhost:8080 — see README.md.
+  # Not for production: hardcoded admin console credentials below.
+  # KC_DB points at this same Postgres instance/database — Keycloak
+  # namespaces its own tables, so there's no collision with this app's
+  # tables, and it avoids standing up a third datastore just for
+  # Keycloak's own config store.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev"]
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/ifric_registry_service
+      - KC_DB_USERNAME=ifric
+      - KC_DB_PASSWORD=ifric
+    ports:
+      - "8080:8080"
     depends_on:
-      mongo:
+      postgres:
         condition: service_healthy
-    restart: "no"
-    entrypoint: ["bash", "-c"]
-    command:
-      - |
-        mongosh --host mongo:27017 --quiet --eval '
-          try {
-            rs.status();
-            print("replica set already initiated");
-          } catch (e) {
-            rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]});
-            print("replica set initiated");
-          }
-        '
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\n\r\n' >&3 && grep 'HTTP/1.1 200' <&3",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
 
-  ifric-registry-backend:
+  # One-shot: applies TypeORM migrations before the app starts (idempotent —
+  # TypeORM tracks applied migrations in its own `migrations` table, so
+  # re-running this on every `up` is safe). Runs from the same image as
+  # ifric-registry-backend, just with a different command.
+  migrate:
     build:
       context: ./backend
       # Some Docker daemons (notably CI/sandboxed environments) restrict
@@ -45,18 +67,40 @@ services:
       # network sidesteps that; it has no effect on how the container runs
       # afterward (ports/networking below are unaffected).
       network: host
+    command: ["npm", "run", "migration:run"]
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=ifric
+      - DB_PASSWORD=ifric
+      - DB_NAME=ifric_registry_service
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ifric-registry-backend:
+    build:
+      context: ./backend
+      network: host
     ports:
       - "4007:4007"
     env_file:
       - ./backend/.env
     environment:
-      # Overrides whatever MONGO_URL is in backend/.env — the compose
-      # topology (service name "mongo", replica set "rs0") is fixed by this
-      # file, not something each user should have to hand-edit into .env.
-      - MONGO_URL=mongodb://mongo:27017/ifric-registry-service?replicaSet=rs0
+      # Overrides whatever DB_* vars are in backend/.env — the compose
+      # topology (service name "postgres") is fixed by this file, not
+      # something each user should have to hand-edit into .env.
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=ifric
+      - DB_PASSWORD=ifric
+      - DB_NAME=ifric_registry_service
     depends_on:
-      mongo-init:
+      migrate:
         condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
 
 volumes:
-  mongo_data:
+  postgres_data:

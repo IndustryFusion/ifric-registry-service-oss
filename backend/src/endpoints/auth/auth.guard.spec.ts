@@ -15,16 +15,16 @@
 //
 
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import { AuthGuard } from './auth.guard';
+import { KeycloakService } from './keycloak.service';
 
 describe('AuthGuard', () => {
   let guard: AuthGuard;
-  let jwtService: { verifyAsync: jest.Mock };
+  let keycloakService: { verifyAccessToken: jest.Mock };
 
   beforeEach(() => {
-    jwtService = { verifyAsync: jest.fn() };
-    guard = new AuthGuard(jwtService as unknown as JwtService);
+    keycloakService = { verifyAccessToken: jest.fn() };
+    guard = new AuthGuard(keycloakService as unknown as KeycloakService);
   });
 
   function contextWithAuthHeader(header?: string): ExecutionContext {
@@ -38,41 +38,34 @@ describe('AuthGuard', () => {
     await expect(guard.canActivate(contextWithAuthHeader())).rejects.toThrow(
       UnauthorizedException,
     );
+    expect(keycloakService.verifyAccessToken).not.toHaveBeenCalled();
   });
 
-  it('rejects when the token fails signature verification', async () => {
-    jwtService.verifyAsync.mockRejectedValue(new Error('invalid signature'));
+  it('rejects when Keycloak rejects the token', async () => {
+    keycloakService.verifyAccessToken.mockRejectedValue(
+      new UnauthorizedException(),
+    );
 
     await expect(
       guard.canActivate(contextWithAuthHeader('Bearer bad-token')),
     ).rejects.toThrow(UnauthorizedException);
   });
 
-  it('rejects a refresh token (type mismatch)', async () => {
-    jwtService.verifyAsync.mockResolvedValue({
-      sub: 'company-1',
-      user: 'user@example.com',
-      type: 'refresh',
-    });
-
-    await expect(
-      guard.canActivate(contextWithAuthHeader('Bearer a-refresh-token')),
-    ).rejects.toThrow(UnauthorizedException);
-  });
-
-  it('accepts a valid access token and attaches the payload to the request', async () => {
+  it('accepts a valid Keycloak access token and attaches the payload to the request', async () => {
     const payload = {
-      sub: 'company-1',
-      user: 'user@example.com',
-      type: 'access',
+      sub: 'kc-user-1',
+      preferred_username: 'user@example.com',
     };
-    jwtService.verifyAsync.mockResolvedValue(payload);
+    keycloakService.verifyAccessToken.mockResolvedValue(payload);
     const request: any = { headers: { authorization: 'Bearer a-valid-token' } };
     const context = {
       switchToHttp: () => ({ getRequest: () => request }),
     } as ExecutionContext;
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(keycloakService.verifyAccessToken).toHaveBeenCalledWith(
+      'a-valid-token',
+    );
     expect(request.user).toEqual(payload);
   });
 });

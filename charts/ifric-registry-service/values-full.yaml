@@ -1,0 +1,21 @@
+# Overlay: adds a bundled ICID instance + its own required MongoDB.
+# Matches docker-compose.full.yaml. Install with:
+#
+#   helm install my-release charts/ifric-registry-service \
+#     -f charts/ifric-registry-service/values.yaml \
+#     -f charts/ifric-registry-service/values-full.yaml \
+#     --set image.repository=<your-registry>/ifric-registry-service \
+#     --set image.tag=<your-tag>
+#
+# ICID itself needs no build/push — icid.image.repository/tag (set in
+# values.yaml) already default to the published ibn40/icid-backend:latest
+# image. Only this service's own image is yours to build and push.
+# When icid.enabled=true, ICID_SERVICE_BACKEND_URL is computed automatically
+# from the release's own icid Service — env.icidServiceBackendUrl is ignored.
+#
+# Note: unlike icid.enabled, keycloak.enabled is already true in the base
+# values.yaml — Keycloak is bundled in both profiles, not something this
+# overlay turns on. Don't assume symmetry with the icid.enabled toggle above.
+
+icid:
+  enabled: true

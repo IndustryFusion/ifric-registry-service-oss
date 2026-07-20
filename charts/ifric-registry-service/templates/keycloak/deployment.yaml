@@ -1,0 +1,75 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-keycloak
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ifric-registry-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: keycloak
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: keycloak
+    spec:
+      # KC_DB=postgres points Keycloak at this chart's own bundled Postgres
+      # (a different set of tables, no collision with the backend's own —
+      # see env below), so Keycloak itself is stateless from Kubernetes'
+      # perspective and needs no PVC of its own, unlike ICID's MongoDB.
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "ifric-registry-service.postgresHost" . }} -p {{ .Values.postgres.service.port }} -U {{ .Values.postgres.auth.user }}; do
+                echo "waiting for postgres..."
+                sleep 2
+              done
+      containers:
+        - name: keycloak
+          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
+          args: ["start-dev"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.keycloak.adminUser | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ifric-registry-service.secretName" . }}
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: {{ printf "jdbc:postgresql://%s:%v/%s" (include "ifric-registry-service.postgresHost" .) .Values.postgres.service.port .Values.postgres.auth.database | quote }}
+            - name: KC_DB_USERNAME
+              value: {{ .Values.postgres.auth.user | quote }}
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ifric-registry-service.secretName" . }}
+                  key: DB_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+{{- end }}

@@ -1,0 +1,40 @@
+{{ include "ifric-registry-service.fullname" . }} has been deployed.
+
+1. The backend Pod runs two initContainers before the app starts:
+   wait-for-postgres (loops pg_isready) and migrate (npm run migration:run).
+   Check their progress with:
+
+     kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=backend
+     kubectl logs <pod-name> -c migrate
+
+2. Once the backend Pod is Ready, reach it with:
+
+     kubectl port-forward svc/{{ include "ifric-registry-service.fullname" . }}-backend {{ .Values.service.port }}:{{ .Values.service.port }}
+     curl http://localhost:{{ .Values.service.port }}/
+     curl -X POST http://localhost:{{ .Values.service.port }}/script   # one-time seed data
+
+{{- if .Values.icid.enabled }}
+
+3. ICID is enabled in this release. Seed its taxonomy once too:
+
+     kubectl port-forward svc/{{ include "ifric-registry-service.icidHost" . }} {{ .Values.icid.service.port }}:{{ .Values.icid.service.port }}
+     curl -X POST http://localhost:{{ .Values.icid.service.port }}/script
+{{- else }}
+
+3. ICID is NOT enabled in this release (icid.enabled=false) — company
+   creation and certificate endpoints need env.icidServiceBackendUrl
+   pointed at a real, externally-reachable ICID-compatible instance.
+   Everything else (users, access groups, assets, twins, factories,
+   product tagging) works without it.
+{{- end }}
+
+{{- if not .Values.secrets.existingSecret }}
+{{- if not .Values.secrets.jwtSecret }}
+
+4. secrets.jwtSecret was not set — a random value was generated for you and
+   will be reused on every future `helm upgrade` of this release (not
+   re-randomized). Retrieve it if you need it outside the cluster:
+
+     kubectl get secret {{ include "ifric-registry-service.secretName" . }} -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+{{- end }}
+{{- end }}

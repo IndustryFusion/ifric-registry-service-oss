@@ -1,0 +1,64 @@
+{{- if .Values.icid.enabled }}
+# ICID's own required database — unrelated to this service's PostgreSQL.
+# Runs unauthenticated as a single-node replica set, matching
+# docker-compose.full.yaml's `mongo` service exactly (ICID is run
+# unmodified, so its connection expectations can't be changed here).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-icid-mongodb
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: icid-mongodb
+spec:
+  serviceName: {{ include "ifric-registry-service.icidMongoHost" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ifric-registry-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: icid-mongodb
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: icid-mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: "{{ .Values.icid.mongodb.image.repository }}:{{ .Values.icid.mongodb.image.tag }}"
+          args: ["--replSet", "rs0", "--bind_ip_all"]
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      {{- if not .Values.icid.mongodb.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.icid.mongodb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.icid.mongodb.persistence.storageClassName }}
+        storageClassName: {{ .Values.icid.mongodb.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.icid.mongodb.persistence.size }}
+  {{- end }}
+{{- end }}

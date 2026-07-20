@@ -41,6 +41,7 @@ import { AccessGroupDto } from '../auth/dto/access-group.dto';
 import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
 import { UpdateFactoryDto } from './dto/update-factory.dto';
+import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 
 @ApiTags('Company')
 @ApiBearerAuth('access-token')
@@ -373,7 +374,11 @@ export class CompanyController {
         },
         company_category: {
           type: 'string',
-          example: 'IT Services',
+          enum: [...COMPANY_CATEGORY_NAMES],
+          example: 'manufacturer',
+          description:
+            'Must be one of the predefined company categories — see ' +
+            'GET /company/get-categories for the current list.',
         },
         meta_data: {
           type: 'object',
@@ -550,6 +555,26 @@ export class CompanyController {
     return this.companyService.getCompanyCategory(company_ifric_id);
   }
 
+  /**
+   * Returns the predefined, closed list of company categories (e.g.
+   * manufacturer, machine_builder, factory_owner) as seeded by
+   * POST /script. company_category on create-company/update-company must
+   * be one of the category_name values returned here.
+   */
+  @UseGuards(AuthGuard)
+  @Get('get-categories')
+  @ApiOperation({
+    summary: 'Get the predefined list of company categories',
+    description:
+      'Returns every row in company_categories — the closed, seeded set ' +
+      'of valid values for company_category on POST /company/create-company ' +
+      'and PATCH /company/update-company/:id. Seed with POST /script if ' +
+      'this returns empty.',
+  })
+  getCompanyCategories() {
+    return this.companyService.getCompanyCategories();
+  }
+
   @UseGuards(AuthGuard)
   @Get('get-manufacturer-companies/:count')
   getManufacturerCompanies(@Param('count') count: string) {
@@ -632,7 +657,11 @@ export class CompanyController {
         },
         company_category: {
           type: 'string',
-          example: 'IT Services',
+          enum: [...COMPANY_CATEGORY_NAMES],
+          example: 'manufacturer',
+          description:
+            'Must be one of the predefined company categories — see ' +
+            'GET /company/get-categories for the current list.',
         },
         meta_data: {
           type: 'object',

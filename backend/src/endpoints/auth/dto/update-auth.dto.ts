@@ -22,5 +22,4 @@ export interface UpdateUserDetails {
   user_image?: string;
   old_password?: string;
   new_password?: string;
-  jwt_token?: string;
 }

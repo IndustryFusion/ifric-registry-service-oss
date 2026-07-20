@@ -15,21 +15,20 @@
 //
 
 import { Injectable } from '@nestjs/common';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { Product } from 'src/schemas/products.schema';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AccessGroup, CompanyCategory, Product } from 'src/entities';
+import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 
 @Injectable()
 export class ScriptService {
   constructor(
-    @InjectModel(AccessGroup.name)
-    private accessModel: Model<AccessGroup>,
-    @InjectModel(CompanyCategory.name)
-    private companyCategoryModel: Model<CompanyCategory>,
-    @InjectModel(Product.name)
-    private productModel: Model<Product>,
+    @InjectRepository(AccessGroup)
+    private accessRepository: Repository<AccessGroup>,
+    @InjectRepository(CompanyCategory)
+    private companyCategoryRepository: Repository<CompanyCategory>,
+    @InjectRepository(Product)
+    private productRepository: Repository<Product>,
   ) {}
 
   /**
@@ -76,37 +75,16 @@ export class ScriptService {
           delete: true,
         },
       ];
-      await this.accessModel.insertMany(accessData);
+      await this.accessRepository.save(
+        accessData.map((d) => this.accessRepository.create(d)),
+      );
 
       // Adding Property Data
-      const companyCategoryData = [
-        {
-          category_name: 'manufacturer',
-        },
-        {
-          category_name: 'user',
-        },
-        {
-          category_name: 'public',
-        },
-        {
-          category_name: 'service_provider',
-        },
-        {
-          category_name: 'retailer',
-        },
-        {
-          category_name: 'logistics',
-        },
-        {
-          category_name: 'recycler',
-        },
-        {
-          category_name: 'factory_owner',
-        },
-      ];
-
-      await this.companyCategoryModel.insertMany(companyCategoryData);
+      await this.companyCategoryRepository.save(
+        COMPANY_CATEGORY_NAMES.map((category_name) =>
+          this.companyCategoryRepository.create({ category_name }),
+        ),
+      );
 
       return {
         success: true,
@@ -136,7 +114,9 @@ export class ScriptService {
           product_name: 'Example Product C',
         },
       ];
-      await this.productModel.insertMany(productData);
+      await this.productRepository.save(
+        productData.map((d) => this.productRepository.create(d)),
+      );
 
       return {
         success: true,

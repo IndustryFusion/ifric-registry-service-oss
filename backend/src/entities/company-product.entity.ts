@@ -5,7 +5,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,25 +14,23 @@
 // limitations under the License.
 //
 
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import * as mongoose from 'mongoose';
-import { HydratedDocument } from 'mongoose';
+import { Column, Entity, Unique } from 'typeorm';
+import { BaseEntity } from '../database/base.entity';
 
-export type CompanyProductDocument = HydratedDocument<CompanyProduct>;
-
-@Schema()
-export class CompanyProduct {
+// Composite UNIQUE is required, not optional — it's the ON CONFLICT target
+// for the upsert in ProductService.updateCompanyProduct (findOneAndUpdate
+// with upsert:true in the Mongoose version, keyed on this same pair).
+@Entity('company_products')
+@Unique(['company_id', 'product_ifric_id'])
+export class CompanyProduct extends BaseEntity {
   // External product identifier — the product itself is catalogued in
   // another system; this only stores the tag. Mirrors CompanyTwin.asset_ifric_id.
-  @Prop()
+  @Column({ type: 'varchar', nullable: true })
   product_ifric_id: string;
 
-  @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Company' })
-  company_id: mongoose.Schema.Types.ObjectId;
+  @Column({ type: 'char', length: 24, nullable: true })
+  company_id: string;
 
-  @Prop()
-  billing_id?: string;
+  @Column({ type: 'varchar', nullable: true })
+  billing_id: string;
 }
-
-export const CompanyProductSchema =
-  SchemaFactory.createForClass(CompanyProduct);

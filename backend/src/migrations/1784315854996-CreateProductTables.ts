@@ -1,0 +1,70 @@
+//
+// Copyright (c) 2026 IndustryFusion Europe UG
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+import { MigrationInterface, QueryRunner } from 'typeorm';
+
+export class CreateProductTables1784315854996 implements MigrationInterface {
+  name = 'CreateProductTables1784315854996';
+
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      CREATE TABLE "company_assets" (
+        "_id" char(24) PRIMARY KEY,
+        "company_id" char(24),
+        "asset_ifric_id" varchar
+      )
+    `);
+
+    await queryRunner.query(`
+      CREATE TABLE "company_gateways" (
+        "_id" char(24) PRIMARY KEY,
+        "company_id" char(24),
+        "gateway_ifric_id" varchar
+      )
+    `);
+
+    await queryRunner.query(`
+      CREATE TABLE "company_servers" (
+        "_id" char(24) PRIMARY KEY,
+        "company_id" char(24),
+        "server_ifric_id" varchar
+      )
+    `);
+
+    await queryRunner.query(`
+      CREATE TABLE "factories" (
+        "_id" char(24) PRIMARY KEY,
+        "factory_id" varchar UNIQUE,
+        "owner_company_ifric_id" varchar,
+        "location_name" varchar,
+        "address_1" varchar,
+        "city" varchar,
+        "country" varchar,
+        "zip" varchar,
+        "latitude" double precision,
+        "longitude" double precision,
+        "timezone" varchar
+      )
+    `);
+  }
+
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`DROP TABLE "factories"`);
+    await queryRunner.query(`DROP TABLE "company_servers"`);
+    await queryRunner.query(`DROP TABLE "company_gateways"`);
+    await queryRunner.query(`DROP TABLE "company_assets"`);
+  }
+}

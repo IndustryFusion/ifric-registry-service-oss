@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-config
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+data:
+  DB_HOST: {{ include "ifric-registry-service.postgresHost" . | quote }}
+  DB_PORT: {{ .Values.postgres.service.port | quote }}
+  DB_USER: {{ .Values.postgres.auth.user | quote }}
+  DB_NAME: {{ .Values.postgres.auth.database | quote }}
+  PORT: {{ .Values.service.port | quote }}
+  CORS_ORIGIN: {{ .Values.env.corsOrigin | quote }}
+  COMPANY_DEFAULT_CODE: {{ .Values.env.companyDefaultCode | quote }}
+  # When ICID is bundled in this release, wire the URL to its in-cluster
+  # Service automatically — values-full.yaml only needs to flip
+  # icid.enabled, not hand-compute this. Otherwise env.icidServiceBackendUrl
+  # must point at a real external instance — required (not just documented)
+  # because the app itself fails fast at boot on a missing/empty
+  # ICID_SERVICE_BACKEND_URL (backend/src/common/env.constants.ts); catching
+  # that here turns a silent pod crash-loop into a clear `helm install`
+  # error instead.
+  {{- if .Values.icid.enabled }}
+  ICID_SERVICE_BACKEND_URL: {{ printf "http://%s:%v" (include "ifric-registry-service.icidHost" .) .Values.icid.service.port | quote }}
+  {{- else }}
+  ICID_SERVICE_BACKEND_URL: {{ required "env.icidServiceBackendUrl is required when icid.enabled=false — point it at a real ICID-compatible instance, or set icid.enabled=true (with -f values-full.yaml) to bundle one" .Values.env.icidServiceBackendUrl | quote }}
+  {{- end }}
+  # This app has no built-in auth of its own — Keycloak is the sole
+  # identity provider (see backend/src/common/env.constants.ts). Same
+  # in-cluster-vs-external pattern as ICID above, except KEYCLOAK_REALM
+  # additionally defaults to "ifric" when bundled (keycloak.enabled=true)
+  # since there's no external instance dictating the name. The two client
+  # secrets (KEYCLOAK_CLIENT_SECRET/KEYCLOAK_ADMIN_CLIENT_SECRET, in
+  # secret.yaml) are NOT `required` here even when bundled — unlike
+  # ICID_SERVICE_BACKEND_URL, there's no safe way to require them upfront:
+  # the confidential "ifric"/"ifric-admin" clients only exist once someone
+  # has completed the one-time manual realm setup against this release's
+  # own just-deployed Keycloak (see README.md), which is only possible
+  # after `helm install` has already brought Keycloak up. Leave them blank
+  # on first install; the backend Pod will crash-loop on its own
+  # env.constants.ts fail-fast check until you `helm upgrade` with the
+  # real values.
+  {{- if .Values.keycloak.enabled }}
+  KEYCLOAK_URL: {{ printf "http://%s:8080" (include "ifric-registry-service.keycloakHost" .) | quote }}
+  KEYCLOAK_REALM: {{ .Values.env.keycloak.realm | default "ifric" | quote }}
+  KEYCLOAK_CLIENT_ID: {{ .Values.env.keycloak.clientId | quote }}
+  KEYCLOAK_ADMIN_CLIENT_ID: {{ .Values.env.keycloak.adminClientId | quote }}
+  {{- else }}
+  KEYCLOAK_URL: {{ required "env.keycloak.url is required when keycloak.enabled=false — point it at a real Keycloak instance, or set keycloak.enabled=true to bundle one" .Values.env.keycloak.url | quote }}
+  KEYCLOAK_REALM: {{ required "env.keycloak.realm is required when keycloak.enabled=false" .Values.env.keycloak.realm | quote }}
+  KEYCLOAK_CLIENT_ID: {{ .Values.env.keycloak.clientId | quote }}
+  KEYCLOAK_ADMIN_CLIENT_ID: {{ .Values.env.keycloak.adminClientId | quote }}
+  {{- end }}

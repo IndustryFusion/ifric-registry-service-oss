@@ -16,11 +16,9 @@
 
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
-import { Company } from 'src/schemas/company.schema';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { Certificate } from 'src/schemas/certificate.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
+import { In, MoreThan, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Company, CompanyUser, Certificate } from 'src/entities';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { envConstants } from 'src/common/env.constants';
@@ -28,12 +26,12 @@ import { envConstants } from 'src/common/env.constants';
 @Injectable()
 export class CertificateService {
   constructor(
-    @InjectModel(Company.name)
-    private companyModel: Model<Company>,
-    @InjectModel(CompanyUser.name)
-    private CompanyUserModel: Model<CompanyUser>,
-    @InjectModel(Certificate.name)
-    private certificateModel: Model<Certificate>,
+    @InjectRepository(Company)
+    private companyRepository: Repository<Company>,
+    @InjectRepository(CompanyUser)
+    private companyUserRepository: Repository<CompanyUser>,
+    @InjectRepository(Certificate)
+    private certificateRepository: Repository<Certificate>,
   ) {}
   private readonly icidUrl = envConstants.icidServiceBackendUrl;
   private readonly ENCRYPTION_SECRET = envConstants.hederaKeySecret;
@@ -82,7 +80,9 @@ export class CertificateService {
     user_email: string,
   ) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
       if (!companyData.length) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -105,7 +105,9 @@ export class CertificateService {
       );
 
       const certificate_data = response.data.keyPair.publicKey;
-      const userData = await this.CompanyUserModel.find({ user_email });
+      const userData = await this.companyUserRepository.find({
+        where: { user_email },
+      });
 
       if (!userData.length) {
         throw new HttpException(
@@ -114,19 +116,19 @@ export class CertificateService {
         );
       }
 
-      const certificateValue = new this.certificateModel({
-        created_on: new Date(),
-        expiry_on: new Date(expiry),
-        company_id: companyData[0].id,
-        user_id: userData[0].id,
-        certificate_data: certificate_data,
-        private_key: this.encryptPrivateKey(response.data.keyPair.privateKey),
-        hedera_did_id: response.data.did,
-        hedera_file_id: response.data.fileId,
-        hedera_account_id: response.data.accountId,
-      });
-
-      await certificateValue.save();
+      await this.certificateRepository.save(
+        this.certificateRepository.create({
+          created_on: new Date(),
+          expiry_on: new Date(expiry),
+          company_id: companyData[0]._id,
+          user_id: userData[0]._id,
+          certificate_data: certificate_data,
+          private_key: this.encryptPrivateKey(response.data.keyPair.privateKey),
+          hedera_did_id: response.data.did,
+          hedera_file_id: response.data.fileId,
+          hedera_account_id: response.data.accountId,
+        }),
+      );
       return {
         success: true,
         status: 201,
@@ -145,7 +147,9 @@ export class CertificateService {
 
   async getCompanyCertificate(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
 
       if (!companyData.length) {
         throw new HttpException(
@@ -154,9 +158,10 @@ export class CertificateService {
         );
       }
 
-      return await this.certificateModel
-        .find({ company_id: companyData[0].id })
-        .sort({ expiry_on: -1, created_on: -1 });
+      return await this.certificateRepository.find({
+        where: { company_id: companyData[0]._id },
+        order: { expiry_on: 'DESC', created_on: 'DESC' },
+      });
     } catch (err) {
       if (err.response) {
         throw new HttpException(err.response.data.message, err.response.status);
@@ -170,7 +175,9 @@ export class CertificateService {
 
   async revealPrivateKey(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
 
       if (!companyData.length) {
         throw new HttpException(
@@ -179,9 +186,10 @@ export class CertificateService {
         );
       }
 
-      const record = await this.certificateModel
-        .find({ company_id: companyData[0].id })
-        .sort({ expiry_on: -1, created_on: -1 });
+      const record = await this.certificateRepository.find({
+        where: { company_id: companyData[0]._id },
+        order: { expiry_on: 'DESC', created_on: 'DESC' },
+      });
       if (!record.length) {
         throw new HttpException(
           'No certificate found for this company',
@@ -217,7 +225,9 @@ export class CertificateService {
 
   async verifyCompanyCertificate(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
 
       if (!companyData.length) {
         throw new HttpException(
@@ -226,9 +236,10 @@ export class CertificateService {
         );
       }
 
-      const certificateData = await this.certificateModel
-        .find({ company_id: companyData[0].id })
-        .sort({ expiry_on: -1, created_on: -1 });
+      const certificateData = await this.certificateRepository.find({
+        where: { company_id: companyData[0]._id },
+        order: { expiry_on: 'DESC', created_on: 'DESC' },
+      });
       if (!certificateData.length) {
         return { data: false };
       }
@@ -270,10 +281,12 @@ export class CertificateService {
     }
   }
 
+  // Ported from a $sort+$group+$first aggregation ("latest cert per
+  // company") — maps directly onto Postgres DISTINCT ON.
   async verifyAllCompanyCertificate(company_ifric_ids: string[]) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: { $in: company_ifric_ids },
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: In(company_ifric_ids) },
       });
 
       if (!companyData.length) {
@@ -285,18 +298,26 @@ export class CertificateService {
 
       const companyMap = companyData.reduce(
         (acc, company) => {
-          acc[company._id.toString()] = company.company_ifric_id;
+          acc[company._id] = company.company_ifric_id;
           return acc;
         },
         {} as Record<string, string>,
       );
 
-      const companyMongoIds = companyData.map((c) => c._id.toString());
-      const certificates = await this.certificateModel.aggregate([
-        { $match: { company_id: { $in: companyMongoIds } } },
-        { $sort: { expiry_on: -1, created_on: -1 } },
-        { $group: { _id: '$company_id', certData: { $first: '$$ROOT' } } },
-      ]);
+      const companyIds = companyData.map((c) => c._id);
+      const rows = companyIds.length
+        ? await this.certificateRepository.query(
+            `SELECT DISTINCT ON (company_id) *
+             FROM certificates
+             WHERE company_id = ANY($1)
+             ORDER BY company_id, expiry_on DESC, created_on DESC`,
+            [companyIds],
+          )
+        : [];
+      const certificates = rows.map((row: any) => ({
+        _id: row.company_id,
+        certData: row,
+      }));
 
       if (!certificates.length) {
         // Return false if no companies has certificate
@@ -317,7 +338,7 @@ export class CertificateService {
         const icidPassingIds = [];
         // iterate for batch wise certs to get ids need to pass for icid call
         for (let j = 0; j < batch.length; j++) {
-          const company_ifric_id = companyMap[batch[j]._id.toString()];
+          const company_ifric_id = companyMap[batch[j]._id];
           if (batch[j].certData.expiry_on < new Date()) {
             result[company_ifric_id] = false;
           } else if (!batch[j].certData.hedera_file_id) {
@@ -361,7 +382,9 @@ export class CertificateService {
     expiry: Date,
   ) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
       if (!companyData.length) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -370,17 +393,15 @@ export class CertificateService {
       }
 
       const today = new Date();
-      const latestCert = await this.certificateModel
-        .find({
-          company_id: companyData[0].id,
-          expiry_on: { $gt: today },
-        })
-        .sort({ expiry_on: -1, created_on: -1 });
+      const latestCert = await this.certificateRepository.find({
+        where: { company_id: companyData[0]._id, expiry_on: MoreThan(today) },
+        order: { expiry_on: 'DESC', created_on: 'DESC' },
+      });
 
       latestCert.forEach(async (cert) => {
-        await this.certificateModel.updateOne(
+        await this.certificateRepository.update(
           { _id: cert._id },
-          { $set: { expiry_on: new Date(expiry) } },
+          { expiry_on: new Date(expiry) },
         );
       });
 
@@ -392,7 +413,9 @@ export class CertificateService {
 
   async deletePrivateKey(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
       if (!companyData.length) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -400,18 +423,19 @@ export class CertificateService {
         );
       }
 
-      const record = await this.certificateModel
-        .find({ company_id: companyData[0].id })
-        .sort({ expiry_on: -1, created_on: -1 });
+      const record = await this.certificateRepository.find({
+        where: { company_id: companyData[0]._id },
+        order: { expiry_on: 'DESC', created_on: 'DESC' },
+      });
       if (!record.length) {
         throw new HttpException(
           'No certificate found for this company',
           HttpStatus.NOT_FOUND,
         );
       }
-      await this.certificateModel.updateOne(
+      await this.certificateRepository.update(
         { _id: record[0]._id },
-        { $set: { private_key: '' } },
+        { private_key: '' },
       );
       return {
         success: true,

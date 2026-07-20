@@ -53,4 +53,72 @@ describe('envConstants.certificatesEnabled', () => {
     delete process.env.HEDERA_KEY_SECRET;
     expect(() => require('./env.constants')).not.toThrow();
   });
+
+  it('requires DB_HOST', () => {
+    delete process.env.DB_HOST;
+    expect(() => require('./env.constants')).toThrow(
+      'DB_HOST environment variable is required',
+    );
+  });
+
+  it('requires DB_NAME', () => {
+    delete process.env.DB_NAME;
+    expect(() => require('./env.constants')).toThrow(
+      'DB_NAME environment variable is required',
+    );
+  });
+
+  it('defaults dbPort to 5432 and dbUser/dbPassword to ifric when unset', () => {
+    delete process.env.DB_PORT;
+    delete process.env.DB_USER;
+    delete process.env.DB_PASSWORD;
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.dbPort).toBe(5432);
+    expect(envConstants.dbUser).toBe('ifric');
+    expect(envConstants.dbPassword).toBe('ifric');
+  });
+
+  it('requires KEYCLOAK_URL', () => {
+    delete process.env.KEYCLOAK_URL;
+    expect(() => require('./env.constants')).toThrow(
+      'KEYCLOAK_URL environment variable is required',
+    );
+  });
+
+  it('requires KEYCLOAK_REALM', () => {
+    delete process.env.KEYCLOAK_REALM;
+    expect(() => require('./env.constants')).toThrow(
+      'KEYCLOAK_REALM environment variable is required',
+    );
+  });
+
+  it('requires KEYCLOAK_CLIENT_SECRET', () => {
+    delete process.env.KEYCLOAK_CLIENT_SECRET;
+    expect(() => require('./env.constants')).toThrow(
+      'KEYCLOAK_CLIENT_SECRET environment variable is required',
+    );
+  });
+
+  it('requires KEYCLOAK_ADMIN_CLIENT_SECRET', () => {
+    delete process.env.KEYCLOAK_ADMIN_CLIENT_SECRET;
+    expect(() => require('./env.constants')).toThrow(
+      'KEYCLOAK_ADMIN_CLIENT_SECRET environment variable is required',
+    );
+  });
+
+  it('defaults keycloak.clientId/adminClientId to ifric/ifric-admin when unset', () => {
+    delete process.env.KEYCLOAK_CLIENT_ID;
+    delete process.env.KEYCLOAK_ADMIN_CLIENT_ID;
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.keycloak.clientId).toBe('ifric');
+    expect(envConstants.keycloak.adminClientId).toBe('ifric-admin');
+  });
+
+  it('uses explicit KEYCLOAK_CLIENT_ID/KEYCLOAK_ADMIN_CLIENT_ID when set', () => {
+    process.env.KEYCLOAK_CLIENT_ID = 'custom-client';
+    process.env.KEYCLOAK_ADMIN_CLIENT_ID = 'custom-admin-client';
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.keycloak.clientId).toBe('custom-client');
+    expect(envConstants.keycloak.adminClientId).toBe('custom-admin-client');
+  });
 });

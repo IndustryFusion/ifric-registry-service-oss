@@ -14,10 +14,15 @@
 // limitations under the License.
 //
 
-if (!process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET environment variable is required');
-}
+import ObjectId from 'bson-objectid';
 
-export const jwtConstants = {
-  secret: process.env.JWT_SECRET,
-};
+// Shared by BaseEntity's @BeforeInsert() hook (for normal save()/create()
+// writes) and by any raw-SQL "INSERT ... ON CONFLICT" upsert (which bypasses
+// entity lifecycle hooks entirely, so needs an _id supplied explicitly on
+// the insert branch — see the upsert helpers in auth.service.ts/
+// product.service.ts for why TypeORM's own repository.upsert() can't be
+// used here: it never fires @BeforeInsert, so newly-inserted rows would get
+// a NULL primary key).
+export function generateId(): string {
+  return new ObjectId().toHexString();
+}

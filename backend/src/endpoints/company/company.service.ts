@@ -15,39 +15,37 @@
 //
 
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, Model } from 'mongoose';
-import { JwtService } from '@nestjs/jwt';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, ILike, In, Repository } from 'typeorm';
 import axios from 'axios';
-import * as bcrypt from 'bcrypt';
 import * as moment from 'moment';
 import { getCountryCode, countries } from 'countries-list';
 import * as generator from 'generate-password';
-import { Company } from 'src/schemas/company.schema';
-import { CompanyTwin } from 'src/schemas/company_twin.schema';
-import { Factory } from 'src/schemas/factory.schema';
-import { CompanyUser } from 'src/schemas/company_user.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { CompanyCategoryMapping } from 'src/schemas/company_category_mapping.schema';
-import { CompanyAsset } from 'src/schemas/company_asset.schema';
-import { CompanyGateWay } from 'src/schemas/company_gateway.schema';
-import { CompanyServer } from 'src/schemas/company_server.schema';
-import { CompanyProduct } from 'src/schemas/company_product.schema';
-import { Product } from 'src/schemas/products.schema';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { UserProductAccessGroup } from 'src/schemas/user_product_access_group.schema';
+import {
+  Company,
+  CompanyTwin,
+  Factory,
+  CompanyUser,
+  CompanyCategory,
+  CompanyCategoryMapping,
+  CompanyAsset,
+  CompanyGateWay,
+  CompanyServer,
+  CompanyProduct,
+  Product,
+  AccessGroup,
+  UserProductAccessGroup,
+} from 'src/entities';
+import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 import { CertificateService } from '../certificate/certificate.service';
-import { jwtConstants } from '../auth/constants';
+import { KeycloakService } from '../auth/keycloak.service';
 import { RegisterAuthDto, AddStatusDto } from '../auth/dto/register-auth.dto';
 import { CompanyAssetDto } from '../auth/dto/company-asset.dto';
 import { AccessGroupDto } from '../auth/dto/access-group.dto';
-import { UserAccessDto } from '../auth/dto/user-access-dto';
 import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
 import { UpdateFactoryDto } from './dto/update-factory.dto';
 import { envConstants } from 'src/common/env.constants';
-
-const BCRYPT_SALT_ROUNDS = 10;
 
 // Default internal-module product identifiers granted to every new
 // company/admin user — placeholders, replace with your own module lineup
@@ -62,29 +60,32 @@ const DEFAULT_PRODUCT_NAMES = [
 @Injectable()
 export class CompanyService {
   constructor(
-    @InjectModel(Company.name) private companyModel: Model<Company>,
-    @InjectModel(CompanyTwin.name) private companyTwinModel: Model<CompanyTwin>,
-    @InjectModel(Factory.name) private factoryModel: Model<Factory>,
-    @InjectModel(CompanyUser.name) private companyUserModel: Model<CompanyUser>,
-    @InjectModel(CompanyCategory.name)
-    private companyCategoryModel: Model<CompanyCategory>,
-    @InjectModel(CompanyCategoryMapping.name)
-    private companyCategoryMappingModel: Model<CompanyCategoryMapping>,
-    @InjectModel(CompanyAsset.name)
-    private companyAssetModel: Model<CompanyAsset>,
-    @InjectModel(CompanyGateWay.name)
-    private companyGateWayModel: Model<CompanyGateWay>,
-    @InjectModel(CompanyServer.name)
-    private companyServerModel: Model<CompanyServer>,
-    @InjectModel(CompanyProduct.name)
-    private companyProductModel: Model<CompanyProduct>,
-    @InjectModel(Product.name) private productModel: Model<Product>,
-    @InjectModel(AccessGroup.name) private accessGroupModel: Model<AccessGroup>,
-    @InjectModel(UserProductAccessGroup.name)
-    private userProductAccessGroupModel: Model<UserProductAccessGroup>,
+    @InjectRepository(Company) private companyRepository: Repository<Company>,
+    @InjectRepository(CompanyTwin)
+    private companyTwinRepository: Repository<CompanyTwin>,
+    @InjectRepository(Factory) private factoryRepository: Repository<Factory>,
+    @InjectRepository(CompanyUser)
+    private companyUserRepository: Repository<CompanyUser>,
+    @InjectRepository(CompanyCategory)
+    private companyCategoryRepository: Repository<CompanyCategory>,
+    @InjectRepository(CompanyCategoryMapping)
+    private companyCategoryMappingRepository: Repository<CompanyCategoryMapping>,
+    @InjectRepository(CompanyAsset)
+    private companyAssetRepository: Repository<CompanyAsset>,
+    @InjectRepository(CompanyGateWay)
+    private companyGateWayRepository: Repository<CompanyGateWay>,
+    @InjectRepository(CompanyServer)
+    private companyServerRepository: Repository<CompanyServer>,
+    @InjectRepository(CompanyProduct)
+    private companyProductRepository: Repository<CompanyProduct>,
+    @InjectRepository(Product) private productRepository: Repository<Product>,
+    @InjectRepository(AccessGroup)
+    private accessGroupRepository: Repository<AccessGroup>,
+    @InjectRepository(UserProductAccessGroup)
+    private userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
     private readonly certificateService: CertificateService,
-    private jwtService: JwtService,
-    @InjectConnection() private readonly connection: Connection,
+    private keycloakService: KeycloakService,
+    @InjectDataSource() private readonly dataSource: DataSource,
   ) {}
 
   private readonly icidUrl = envConstants.icidServiceBackendUrl;
@@ -102,14 +103,16 @@ export class CompanyService {
   async getFactories(
     ownerCompanyIfricId?: string,
   ): Promise<Record<string, any>[]> {
-    const filter = ownerCompanyIfricId
+    const where = ownerCompanyIfricId
       ? { owner_company_ifric_id: ownerCompanyIfricId }
       : {};
-    return this.factoryModel.find(filter);
+    return this.factoryRepository.find({ where });
   }
 
   async getFactoryById(factoryId: string): Promise<Record<string, any>> {
-    const factory = await this.factoryModel.findOne({ factory_id: factoryId });
+    const factory = await this.factoryRepository.findOne({
+      where: { factory_id: factoryId },
+    });
     if (!factory) {
       return {
         factory: null,
@@ -120,7 +123,9 @@ export class CompanyService {
   }
 
   async getFactoryOwner(factoryId: string): Promise<Record<string, any>> {
-    const factory = await this.factoryModel.findOne({ factory_id: factoryId });
+    const factory = await this.factoryRepository.findOne({
+      where: { factory_id: factoryId },
+    });
     if (!factory) {
       return {
         owner: null,
@@ -128,8 +133,8 @@ export class CompanyService {
       };
     }
 
-    const owner = await this.companyModel.findOne({
-      company_ifric_id: factory.owner_company_ifric_id,
+    const owner = await this.companyRepository.findOne({
+      where: { company_ifric_id: factory.owner_company_ifric_id },
     });
     if (!owner) {
       return {
@@ -141,14 +146,16 @@ export class CompanyService {
   }
 
   async getFactoryProducts(factoryId: string): Promise<string[]> {
-    const twins = await this.companyTwinModel.find({ factory_id: factoryId });
+    const twins = await this.companyTwinRepository.find({
+      where: { factory_id: factoryId },
+    });
     return twins.map((twin) => twin.asset_ifric_id);
   }
 
   async createFactory(data: CreateFactoryDto) {
     try {
-      const ownerCompany = await this.companyModel.find({
-        company_ifric_id: data.owner_company_ifric_id,
+      const ownerCompany = await this.companyRepository.find({
+        where: { company_ifric_id: data.owner_company_ifric_id },
       });
       if (ownerCompany.length === 0) {
         throw new HttpException(
@@ -156,14 +163,13 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
-      const existing = await this.factoryModel.find({
-        factory_id: data.factory_id,
+      const existing = await this.factoryRepository.find({
+        where: { factory_id: data.factory_id },
       });
       if (existing.length > 0) {
         throw new HttpException('Factory already exists', HttpStatus.CONFLICT);
       }
-      const factory = new this.factoryModel(data);
-      await factory.save();
+      await this.factoryRepository.save(this.factoryRepository.create(data));
       return {
         success: true,
         status: 201,
@@ -182,12 +188,11 @@ export class CompanyService {
 
   async updateFactory(factoryId: string, data: UpdateFactoryDto) {
     try {
-      const response = await this.factoryModel.findOneAndUpdate(
+      const result = await this.factoryRepository.update(
         { factory_id: factoryId },
         data,
-        { new: true },
       );
-      if (!response) {
+      if (!(result.affected > 0)) {
         throw new HttpException(
           'No factory found with the provided ID',
           HttpStatus.NOT_FOUND,
@@ -207,8 +212,8 @@ export class CompanyService {
 
   async deleteFactory(factoryId: string) {
     try {
-      const twinsAtFactory = await this.companyTwinModel.find({
-        factory_id: factoryId,
+      const twinsAtFactory = await this.companyTwinRepository.find({
+        where: { factory_id: factoryId },
       });
       if (twinsAtFactory.length > 0) {
         throw new HttpException(
@@ -216,7 +221,7 @@ export class CompanyService {
           HttpStatus.CONFLICT,
         );
       }
-      return await this.factoryModel.deleteOne({ factory_id: factoryId });
+      return await this.factoryRepository.delete({ factory_id: factoryId });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -233,214 +238,212 @@ export class CompanyService {
   // Server) — relocated from AuthController/AuthService.
   // ===========================================================================
 
+  // createCompany + the admin CompanyUser it provisions run as a single
+  // QueryRunner transaction (previously two independent Mongo sessions,
+  // collapsed now that cross-table ACID is native — a genuine
+  // simplification with no visible change to this method's HTTP contract).
+  // The ICID mint call stays outside the DB transaction and keeps its own
+  // manual compensating DELETE on failure, since ICID is external and
+  // can't be rolled back by SQL.
   async createCompany(data: RegisterAuthDto) {
-    let temp_icid_company_id = null;
-    let temp_company_user_id = null;
-    let temp_product_access_group_ids: string[] = [];
-    let temp_company_category_mapping_id = null;
-    const temp_company_product_access_ids: string[] = [];
-    let temp_company_access_group_ids: string[] = [];
-    let temp_company_id = null;
-
-    const session = await this.connection.startSession();
+    let temp_icid_company_id: string | null = null;
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
     try {
-      const companyResponse = await this.companyModel.find({
-        email: data.email,
+      const companyResponse = await this.companyRepository.find({
+        where: { email: data.email },
       });
-      const companyCheckResponse = await this.companyModel.find({
-        company_name: data.company_name,
+      const companyCheckResponse = await this.companyRepository.find({
+        where: { company_name: data.company_name },
       });
       if (companyResponse.length > 0) {
         throw new HttpException('Mail Id already exists', HttpStatus.CONFLICT);
       } else if (companyCheckResponse.length > 0) {
         throw new HttpException('Company already exists', HttpStatus.CONFLICT);
-      } else {
-        // Fetch IFRIC ID From icid-service
-        const countryCode = getCountryCode(data.country);
-        const countryKey = Object.keys(countries).find(
-          (key) => key == countryCode,
-        );
-        const regionCode = countries[countryKey].continent;
-        const companyCodeArr = this.company_default_code.split('-');
-        const ifricResponse = await axios.post(
-          `${this.icidUrl}/company`,
-          {
-            dataspace_code: companyCodeArr[0],
-            object_type_code: companyCodeArr[1],
-            object_sub_type_code: companyCodeArr[2],
-            registration_code: data.registration_number,
-            region_code: regionCode,
-            country_code: countryCode,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-        );
-        if (ifricResponse.data.status == '201') {
-          data.company_ifric_id = ifricResponse.data.urn_id;
-          temp_icid_company_id = ifricResponse.data.urn_id;
-        } else {
-          throw new HttpException(
-            ifricResponse.data.message,
-            ifricResponse.data.status,
-          );
-        }
-
-        // Add Temporary Password
-        const temporaryPassword = await generator.generate({
-          length: 8,
-          numbers: true,
-          symbols: true,
-          uppercase: true,
-          excludeSimilarCharacters: true,
-        });
-
-        // encrypt the password
-        const encryptedPassword = await this.hashPassword(temporaryPassword);
-        data.password = encryptedPassword;
-
-        // add meta data in company data
-        data.meta_data = {
-          created_at: new Date(),
-          updated_at: '',
-          modified_by: '',
-        };
-
-        // add company image if available
-        if (data.company_logo) {
-          data.company_image = data.company_logo;
-        }
-
-        let companySaveResponse;
-        await session.withTransaction(async () => {
-          // fail-fast existence checks inside txn (optional but consistent)
-          // Save company
-          companySaveResponse = await new this.companyModel(data).save({
-            session,
-          });
-          temp_company_id = companySaveResponse.id;
-
-          // Category mapping
-          const companyCategory = await this.companyCategoryModel
-            .findOne({ category_name: data.company_category })
-            .session(session);
-          if (!companyCategory)
-            throw new HttpException(
-              'Company category does not exist',
-              HttpStatus.NOT_FOUND,
-            );
-
-          const mapping = await new this.companyCategoryMappingModel({
-            category_id: companyCategory.id,
-            company_id: companySaveResponse.id,
-          }).save({ session });
-
-          temp_company_category_mapping_id = mapping.id;
-
-          // Default internal-module product identifiers — matches
-          // DEFAULT_PRODUCT_NAMES. These aren't looked up in a local
-          // catalog: product data lives in an external system, so linking
-          // never fails on seed state — a fresh company always gets these
-          // links regardless of whether /script/create-product was ever run.
-          for (const name of DEFAULT_PRODUCT_NAMES) {
-            const companyProduct = await new this.companyProductModel({
-              product_ifric_id: name,
-              company_id: companySaveResponse.id,
-            }).save({ session });
-            temp_company_product_access_ids.push(companyProduct.id);
-          }
-
-          // Access groups
-          const accessGroups = await this.accessGroupModel.insertMany(
-            [
-              {
-                company_id: companySaveResponse.id,
-                group_name: 'read_only',
-                create: false,
-                read: true,
-                update: false,
-                delete: false,
-              },
-              {
-                company_id: companySaveResponse.id,
-                group_name: 'admin',
-                create: true,
-                read: true,
-                update: true,
-                delete: true,
-              },
-            ],
-            { session },
-          );
-          temp_company_access_group_ids = accessGroups.map((ag) => ag.id);
-        });
-
-        const products = DEFAULT_PRODUCT_NAMES.map((product) => ({
-          product,
-          user_role: 'admin',
-        }));
-
-        // Add Admin in Company User
-        const companyUserData = {
-          user_name: data.admin_name,
-          user_email: data.email,
-          user_password: temporaryPassword,
-          company_ifric_id: data.company_ifric_id,
-          products,
-        };
-
-        const companyUserResponse = await this.createAdminUser(companyUserData);
-        temp_company_user_id = companyUserResponse.userId;
-        temp_product_access_group_ids =
-          companyUserResponse.productAccessGroupIds;
-
-        if (companyUserResponse.status === 201) {
-          return {
-            success: true,
-            status: 201,
-            message: 'Company created successfully',
-            company_ifric_id: data.company_ifric_id,
-            temporaryPassword,
-          };
-        } else {
-          return companyUserResponse;
-        }
       }
+
+      // Fetch IFRIC ID From icid-service
+      const countryCode = getCountryCode(data.country);
+      const countryKey = Object.keys(countries).find(
+        (key) => key == countryCode,
+      );
+      const regionCode = countries[countryKey].continent;
+      const companyCodeArr = this.company_default_code.split('-');
+      const ifricResponse = await axios.post(
+        `${this.icidUrl}/company`,
+        {
+          dataspace_code: companyCodeArr[0],
+          object_type_code: companyCodeArr[1],
+          object_sub_type_code: companyCodeArr[2],
+          registration_code: data.registration_number,
+          region_code: regionCode,
+          country_code: countryCode,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+      if (ifricResponse.data.status == '201') {
+        data.company_ifric_id = ifricResponse.data.urn_id;
+        temp_icid_company_id = ifricResponse.data.urn_id;
+      } else {
+        throw new HttpException(
+          ifricResponse.data.message,
+          ifricResponse.data.status,
+        );
+      }
+
+      // Add Temporary Password
+      const temporaryPassword = await generator.generate({
+        length: 8,
+        numbers: true,
+        symbols: true,
+        uppercase: true,
+        excludeSimilarCharacters: true,
+      });
+
+      // add meta data in company data
+      data.meta_data = {
+        created_at: new Date(),
+        updated_at: '',
+        modified_by: '',
+      };
+
+      // add company image if available
+      if (data.company_logo) {
+        data.company_image = data.company_logo;
+      }
+
+      await queryRunner.startTransaction();
+
+      const company = await queryRunner.manager.save(
+        Company,
+        queryRunner.manager.create(Company, data as any),
+      );
+
+      const companyCategory = await queryRunner.manager.findOne(
+        CompanyCategory,
+        { where: { category_name: data.company_category } },
+      );
+      if (!companyCategory) {
+        throw new HttpException(
+          `Company category does not exist. Must be one of: ${COMPANY_CATEGORY_NAMES.join(', ')}`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      await queryRunner.manager.save(
+        CompanyCategoryMapping,
+        queryRunner.manager.create(CompanyCategoryMapping, {
+          category_id: companyCategory._id,
+          company_id: company._id,
+        }),
+      );
+
+      // Default internal-module product identifiers — matches
+      // DEFAULT_PRODUCT_NAMES. These aren't looked up in a local catalog:
+      // product data lives in an external system, so linking never fails
+      // on seed state — a fresh company always gets these links regardless
+      // of whether /script/create-product was ever run.
+      for (const name of DEFAULT_PRODUCT_NAMES) {
+        await queryRunner.manager.save(
+          CompanyProduct,
+          queryRunner.manager.create(CompanyProduct, {
+            product_ifric_id: name,
+            company_id: company._id,
+          }),
+        );
+      }
+
+      await queryRunner.manager.save(AccessGroup, [
+        queryRunner.manager.create(AccessGroup, {
+          company_id: company._id,
+          group_name: 'read_only',
+          create: false,
+          read: true,
+          update: false,
+          delete: false,
+        }),
+        queryRunner.manager.create(AccessGroup, {
+          company_id: company._id,
+          group_name: 'admin',
+          create: true,
+          read: true,
+          update: true,
+          delete: true,
+        }),
+      ]);
+
+      // Admin CompanyUser + per-product access grants — previously a
+      // separate call to a private createAdminUser() opening its own
+      // independent transaction; now folded into this same one.
+      const existingUser = await queryRunner.manager.findOne(CompanyUser, {
+        where: { user_email: data.email },
+      });
+      if (existingUser) {
+        throw new HttpException('User already exists', HttpStatus.CONFLICT);
+      }
+
+      // Provision the identity in Keycloak — credentials live there, not
+      // in this table.
+      await this.keycloakService.createUser(
+        data.email,
+        data.admin_name,
+        temporaryPassword,
+      );
+      const user = await queryRunner.manager.save(
+        CompanyUser,
+        queryRunner.manager.create(CompanyUser, {
+          company_id: company._id,
+          user_email: data.email,
+          user_name: data.admin_name,
+          meta_data: {
+            created_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
+            updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
+            add_by: data.email,
+          },
+        }),
+      );
+
+      const products = DEFAULT_PRODUCT_NAMES.map((product) => ({
+        product,
+        user_role: 'admin',
+      }));
+      for (const p of products) {
+        const accessGroup = await queryRunner.manager.findOne(AccessGroup, {
+          where: { company_id: company._id, group_name: p.user_role },
+        });
+        if (!accessGroup) continue;
+        await queryRunner.manager.save(
+          UserProductAccessGroup,
+          queryRunner.manager.create(UserProductAccessGroup, {
+            user_id: user._id,
+            product_ifric_id: p.product,
+            access_group_id: accessGroup._id,
+          }),
+        );
+      }
+
+      await queryRunner.commitTransaction();
+
+      return {
+        success: true,
+        status: 201,
+        message: 'Company created successfully',
+        company_ifric_id: data.company_ifric_id,
+        temporaryPassword,
+      };
     } catch (err) {
+      if (queryRunner.isTransactionActive) {
+        await queryRunner.rollbackTransaction();
+      }
       if (temp_icid_company_id) {
         await axios.delete(`${this.icidUrl}/company/` + temp_icid_company_id, {
           headers: {
             'Content-Type': 'application/json',
           },
-        });
-      }
-      if (temp_company_id) {
-        await this.companyModel.findByIdAndDelete(temp_company_id);
-      }
-      if (temp_company_category_mapping_id) {
-        await this.companyCategoryMappingModel.findByIdAndDelete(
-          temp_company_category_mapping_id,
-        );
-      }
-      if (temp_company_product_access_ids.length > 0) {
-        await this.companyProductModel.deleteMany({
-          _id: { $in: temp_company_product_access_ids },
-        });
-      }
-      if (temp_company_access_group_ids.length > 0) {
-        await this.accessGroupModel.deleteMany({
-          _id: { $in: temp_company_access_group_ids },
-        });
-      }
-      if (temp_company_user_id) {
-        await this.companyUserModel.findByIdAndDelete(temp_company_user_id);
-      }
-      if (temp_product_access_group_ids.length > 0 && temp_company_user_id) {
-        await this.userProductAccessGroupModel.deleteMany({
-          product_ifric_id: { $in: temp_product_access_group_ids },
-          user_id: temp_company_user_id,
         });
       }
 
@@ -452,14 +455,14 @@ export class CompanyService {
         throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
       }
     } finally {
-      session.endSession();
+      await queryRunner.release();
     }
   }
 
   async createCompanyAsset(data: CompanyAssetDto) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: data.company_ifric_id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: data.company_ifric_id },
       });
       if (companyData.length === 0) {
         throw new HttpException(
@@ -476,11 +479,12 @@ export class CompanyService {
               HttpStatus.BAD_REQUEST,
             );
           }
-          const assetData = new this.companyAssetModel({
-            company_id: companyData[0].id,
-            asset_ifric_id: data.asset_ifric_id,
-          });
-          await assetData.save();
+          await this.companyAssetRepository.save(
+            this.companyAssetRepository.create({
+              company_id: companyData[0]._id,
+              asset_ifric_id: data.asset_ifric_id,
+            }),
+          );
           break;
         }
         case 'gateway': {
@@ -490,11 +494,12 @@ export class CompanyService {
               HttpStatus.BAD_REQUEST,
             );
           }
-          const gatewayData = new this.companyGateWayModel({
-            company_id: companyData[0].id,
-            gateway_ifric_id: data.gateway_ifric_id,
-          });
-          await gatewayData.save();
+          await this.companyGateWayRepository.save(
+            this.companyGateWayRepository.create({
+              company_id: companyData[0]._id,
+              gateway_ifric_id: data.gateway_ifric_id,
+            }),
+          );
           break;
         }
         case 'server': {
@@ -504,11 +509,12 @@ export class CompanyService {
               HttpStatus.BAD_REQUEST,
             );
           }
-          const serverData = new this.companyServerModel({
-            company_id: companyData[0].id,
-            server_ifric_id: data.server_ifric_id,
-          });
-          await serverData.save();
+          await this.companyServerRepository.save(
+            this.companyServerRepository.create({
+              company_id: companyData[0]._id,
+              server_ifric_id: data.server_ifric_id,
+            }),
+          );
           break;
         }
         default:
@@ -536,7 +542,9 @@ export class CompanyService {
 
   async createAccessGroup(id: string, data: AccessGroupDto) {
     try {
-      const response = await this.companyModel.find({ company_ifric_id: id });
+      const response = await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
       if (response.length === 0) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -544,10 +552,9 @@ export class CompanyService {
         );
       }
 
-      data.company_id = response[0].id;
-      const checkAccessGroup = await this.accessGroupModel.find({
-        company_id: response[0].id,
-        group_name: data.group_name,
+      data.company_id = response[0]._id;
+      const checkAccessGroup = await this.accessGroupRepository.find({
+        where: { company_id: response[0]._id, group_name: data.group_name },
       });
       if (checkAccessGroup.length > 0) {
         throw new HttpException(
@@ -556,8 +563,9 @@ export class CompanyService {
         );
       }
 
-      const accessData = new this.accessGroupModel(data);
-      await accessData.save();
+      await this.accessGroupRepository.save(
+        this.accessGroupRepository.create(data),
+      );
       return {
         success: true,
         status: 201,
@@ -576,10 +584,9 @@ export class CompanyService {
 
   async addStatusDetail(data: AddStatusDto) {
     try {
-      await this.companyModel.findOneAndUpdate(
+      await this.companyRepository.update(
         { company_ifric_id: data.company_id },
         { company_verified: data.status.toLowerCase() },
-        { new: true },
       );
       return {
         success: true,
@@ -599,12 +606,12 @@ export class CompanyService {
 
   async getCompanyAssetsbyAsset(id: string) {
     try {
-      const response = await this.companyAssetModel.find({
-        asset_ifric_id: id,
+      const response = await this.companyAssetRepository.find({
+        where: { asset_ifric_id: id },
       });
       if (response.length === 0) {
-        const twinResponse = await this.companyTwinModel.find({
-          asset_ifric_id: id,
+        const twinResponse = await this.companyTwinRepository.find({
+          where: { asset_ifric_id: id },
         });
         if (twinResponse.length === 0) {
           throw new HttpException(
@@ -612,13 +619,13 @@ export class CompanyService {
             HttpStatus.NOT_FOUND,
           );
         }
-        const responseComapny = await this.companyModel.find({
-          _id: twinResponse[0].owner_company_id,
+        const responseComapny = await this.companyRepository.find({
+          where: { _id: twinResponse[0].owner_company_id },
         });
         return responseComapny[0];
       } else {
-        const responseComapny = await this.companyModel.find({
-          _id: response[0].company_id,
+        const responseComapny = await this.companyRepository.find({
+          where: { _id: response[0].company_id },
         });
         return responseComapny[0];
       }
@@ -635,7 +642,9 @@ export class CompanyService {
 
   async getCompanyAssetByAssetId(asset_ifric_id: string) {
     try {
-      return await this.companyAssetModel.find({ asset_ifric_id });
+      return await this.companyAssetRepository.find({
+        where: { asset_ifric_id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -649,7 +658,9 @@ export class CompanyService {
 
   async getCompanyAssets(id: string) {
     try {
-      const response = await this.companyModel.find({ company_ifric_id: id });
+      const response = await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
       if (response.length === 0) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -657,7 +668,9 @@ export class CompanyService {
         );
       }
 
-      return await this.companyAssetModel.find({ company_id: response[0].id });
+      return await this.companyAssetRepository.find({
+        where: { company_id: response[0]._id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -671,7 +684,9 @@ export class CompanyService {
 
   async getCompanyAccessGroup(id: string) {
     try {
-      const response = await this.companyModel.find({ company_ifric_id: id });
+      const response = await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
       if (response.length === 0) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -679,7 +694,9 @@ export class CompanyService {
         );
       }
 
-      return await this.accessGroupModel.find({ company_id: response[0].id });
+      return await this.accessGroupRepository.find({
+        where: { company_id: response[0]._id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -693,7 +710,9 @@ export class CompanyService {
 
   async getAccessGroupByGroupName(company_id: string, group_name: string) {
     try {
-      return await this.accessGroupModel.findOne({ company_id, group_name });
+      return await this.accessGroupRepository.findOne({
+        where: { company_id, group_name },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -707,7 +726,7 @@ export class CompanyService {
 
   async getAccessGroup(id: string) {
     try {
-      return await this.accessGroupModel.findById(id);
+      return await this.accessGroupRepository.findOne({ where: { _id: id } });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -721,8 +740,8 @@ export class CompanyService {
 
   async getCategorySpecificCompanies(categoryName: string) {
     try {
-      const companyCategory = await this.companyCategoryModel.find({
-        category_name: categoryName,
+      const companyCategory = await this.companyCategoryRepository.find({
+        where: { category_name: categoryName },
       });
       if (!(companyCategory.length > 0)) {
         throw new HttpException(
@@ -730,14 +749,19 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
-      const categoryMappingData = await this.companyCategoryMappingModel.find({
-        category_id: companyCategory[0].id,
-      });
+      const categoryMappingData =
+        await this.companyCategoryMappingRepository.find({
+          where: { category_id: companyCategory[0]._id },
+        });
+      const companyIds = categoryMappingData.map((m) => m.company_id);
+      const companies = companyIds.length
+        ? await this.companyRepository.find({ where: { _id: In(companyIds) } })
+        : [];
+      const companyById = new Map(companies.map((c) => [c._id, c]));
+
       const result = [];
-      for (let i = 0; i < categoryMappingData.length; i++) {
-        const companyData = await this.companyModel.findById(
-          categoryMappingData[i].company_id,
-        );
+      for (const mapping of categoryMappingData) {
+        const companyData = companyById.get(mapping.company_id);
         if (companyData) {
           result.push({
             company_ifric_id: companyData.company_ifric_id,
@@ -760,7 +784,9 @@ export class CompanyService {
 
   async getCompanyDetails(id: string) {
     try {
-      return await this.companyModel.find({ company_ifric_id: id });
+      return await this.companyRepository.find({
+        where: { company_ifric_id: id },
+      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -774,7 +800,7 @@ export class CompanyService {
 
   async getCompanyDetailsbyRecord(id: string) {
     try {
-      return await this.companyModel.find({ _id: id });
+      return await this.companyRepository.find({ where: { _id: id } });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -786,24 +812,29 @@ export class CompanyService {
     }
   }
 
+  // Ported from a $match+$project aggregation with an explicit `_id: 0`
+  // exclusion — this response never included `_id`/`__v`, unlike most other
+  // endpoints in this file that return raw documents.
   async getCompanyContactDetails(company_ifric_id: string) {
     try {
-      return await this.companyModel.aggregate([
-        { $match: { company_ifric_id } },
+      const company = await this.companyRepository.findOne({
+        where: { company_ifric_id },
+      });
+      if (!company) {
+        return [];
+      }
+      return [
         {
-          $project: {
-            _id: 0,
-            admin_name: 1,
-            position: 1,
-            email: 1,
-            mobile_number: '**********',
-            address: '$address_1',
-            city: 1,
-            country: 1,
-            zip: 1,
-          },
+          admin_name: company.admin_name,
+          position: company.position,
+          email: company.email,
+          mobile_number: '**********',
+          address: company.address_1,
+          city: company.city,
+          country: company.country,
+          zip: company.zip,
         },
-      ]);
+      ];
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -834,12 +865,12 @@ export class CompanyService {
         );
       }
 
-      const companyDataByName = await this.companyModel.find({
-        company_name: decodeURIComponent(company_name),
+      const companyDataByName = await this.companyRepository.find({
+        where: { company_name: decodeURIComponent(company_name) },
       });
-      const companyDataByRegistrationNumber = await this.companyModel.find({
-        registration_number,
-      });
+      const companyDataByRegistrationNumber = await this.companyRepository.find(
+        { where: { registration_number } },
+      );
 
       return {
         company_name: companyDataByName.length ? true : false,
@@ -860,7 +891,7 @@ export class CompanyService {
 
   async getCompanyDetailsByEmail(email: string) {
     try {
-      return await this.companyModel.find({ email });
+      return await this.companyRepository.find({ where: { email } });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -874,7 +905,7 @@ export class CompanyService {
 
   async getCompanyDetailsByName(company_name: string) {
     try {
-      return await this.companyModel.find({ company_name });
+      return await this.companyRepository.find({ where: { company_name } });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -886,138 +917,88 @@ export class CompanyService {
     }
   }
 
+  // Ported from the most complex aggregation in the codebase (2-level nested
+  // $lookup+$group+$unwind). Assembled as plain queries + in-memory joins.
+  //
+  // Preserves a real pre-existing schema/query mismatch from the Mongo
+  // version: its $lookups joined `companyproducts.product_id`/
+  // `userproductmapping.product_id` against `products._id`, but
+  // CompanyProduct/UserProductAccessGroup only ever had `product_ifric_id`
+  // (a plain external identifier), never `product_id` — so those two
+  // $lookups always matched zero documents. That means `company_products`
+  // was always `[]` and every `user_products[].product_name` was always
+  // absent, regardless of what products are actually tagged. Reproduced
+  // as-is here (not "fixed") since this port's job is behavioral parity,
+  // not a product-catalog redesign.
   async getCompanyAndUserDetails(company_ifric_id: string) {
     try {
-      const response = await this.companyModel.aggregate([
+      const company = await this.companyRepository.findOne({
+        where: { company_ifric_id },
+      });
+      if (!company) {
+        return [];
+      }
+
+      const mapping = await this.companyCategoryMappingRepository.find({
+        where: { company_id: company._id },
+      });
+      const category = mapping.length
+        ? await this.companyCategoryRepository.findOne({
+            where: { _id: mapping[0].category_id },
+          })
+        : null;
+
+      const users = await this.companyUserRepository.find({
+        where: { company_id: company._id },
+      });
+      const companyUsers = [];
+      for (const user of users) {
+        const accessRows = await this.userProductAccessGroupRepository.find({
+          where: { user_id: user._id },
+        });
+        if (accessRows.length === 0) {
+          // Matches $unwind(preserveNullAndEmptyArrays) on a user with no
+          // access-group rows at all: a single user_products entry with
+          // every field absent.
+          companyUsers.push({
+            user_name: user.user_name,
+            user_email: user.user_email,
+            user_products: [{}],
+          });
+          continue;
+        }
+        const user_products = [];
+        for (const row of accessRows) {
+          const accessGroup = await this.accessGroupRepository.findOne({
+            where: { _id: row.access_group_id },
+          });
+          user_products.push({
+            group_name: accessGroup?.group_name,
+            create: accessGroup?.create,
+            read: accessGroup?.read,
+            update: accessGroup?.update,
+            delete: accessGroup?.delete,
+          });
+        }
+        companyUsers.push({
+          user_name: user.user_name,
+          user_email: user.user_email,
+          user_products,
+        });
+      }
+
+      return [
         {
-          $match: { company_ifric_id },
+          company_name: company.company_name,
+          company_ifric_id: company.company_ifric_id,
+          company_category: category?.category_name,
+          company_address: company.address_1,
+          company_city: company.city,
+          company_country: company.country,
+          company_products: [],
+          company_users: companyUsers,
         },
-        {
-          $lookup: {
-            from: 'companycategorymappings',
-            localField: '_id',
-            foreignField: 'company_id',
-            as: 'mapping',
-          },
-        },
-        {
-          $lookup: {
-            from: 'companycategories',
-            localField: 'mapping.category_id',
-            foreignField: '_id',
-            as: 'category',
-          },
-        },
-        {
-          $lookup: {
-            from: 'companyproducts',
-            localField: '_id',
-            foreignField: 'company_id',
-            as: 'companyproducts',
-          },
-        },
-        {
-          $lookup: {
-            from: 'products',
-            localField: 'companyproducts.product_id',
-            foreignField: '_id',
-            as: 'company_product_details',
-          },
-        },
-        {
-          $lookup: {
-            from: 'companyusers',
-            let: { companyId: '$_id' },
-            pipeline: [
-              {
-                $match: {
-                  $expr: { $eq: ['$$companyId', '$company_id'] },
-                },
-              },
-              {
-                $lookup: {
-                  from: 'userproductaccessgroups',
-                  localField: '_id',
-                  foreignField: 'user_id',
-                  as: 'userproductmapping',
-                },
-              },
-              {
-                $unwind: {
-                  path: '$userproductmapping',
-                  preserveNullAndEmptyArrays: true,
-                },
-              },
-              {
-                $lookup: {
-                  from: 'products',
-                  localField: 'userproductmapping.product_id',
-                  foreignField: '_id',
-                  as: 'productinfo',
-                },
-              },
-              {
-                $lookup: {
-                  from: 'accessgroups',
-                  localField: 'userproductmapping.access_group_id',
-                  foreignField: '_id',
-                  as: 'accessgroupinfo',
-                },
-              },
-              {
-                $group: {
-                  _id: '$_id',
-                  user_name: { $first: '$user_name' },
-                  user_email: { $first: '$user_email' },
-                  user_products: {
-                    $push: {
-                      product_name: {
-                        $arrayElemAt: ['$productinfo.product_name', 0],
-                      },
-                      group_name: {
-                        $arrayElemAt: ['$accessgroupinfo.group_name', 0],
-                      },
-                      create: { $arrayElemAt: ['$accessgroupinfo.create', 0] },
-                      read: { $arrayElemAt: ['$accessgroupinfo.read', 0] },
-                      update: { $arrayElemAt: ['$accessgroupinfo.update', 0] },
-                      delete: { $arrayElemAt: ['$accessgroupinfo.delete', 0] },
-                    },
-                  },
-                },
-              },
-              {
-                $project: {
-                  _id: 0,
-                  user_name: 1,
-                  user_email: 1,
-                  user_products: 1,
-                },
-              },
-            ],
-            as: 'companyusers',
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            company_name: 1,
-            company_ifric_id: 1,
-            company_category: { $arrayElemAt: ['$category.category_name', 0] },
-            company_address: '$address_1',
-            company_city: '$city',
-            company_country: '$country',
-            company_products: {
-              $map: {
-                input: '$company_product_details',
-                as: 'prod',
-                in: '$$prod.product_name',
-              },
-            },
-            company_users: '$companyusers',
-          },
-        },
-      ]);
-      return response;
+      ];
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1029,82 +1010,51 @@ export class CompanyService {
     }
   }
 
+  // Ported from an aggregation whose company-products $lookup pair was
+  // duplicated verbatim (a no-op copy/paste in the Mongo version) — only
+  // implemented once here. company_products is always [] for the same
+  // schema-mismatch reason documented on getCompanyAndUserDetails.
   async getAllCompanies() {
     try {
-      const companyData = await this.companyModel.aggregate([
-        {
-          $sort: { _id: -1 },
-        },
-        {
-          $lookup: {
-            from: 'companycategorymappings',
-            localField: '_id',
-            foreignField: 'company_id',
-            as: 'maping',
-          },
-        },
-        {
-          $lookup: {
-            from: 'companycategories',
-            localField: 'maping.category_id',
-            foreignField: '_id',
-            as: 'category',
-          },
-        },
-        {
-          $lookup: {
-            from: 'companyproducts',
-            localField: '_id',
-            foreignField: 'company_id',
-            as: 'companyproducts',
-          },
-        },
-        {
-          $lookup: {
-            from: 'products',
-            localField: 'companyproducts.product_id',
-            foreignField: '_id',
-            as: 'company_product_details',
-          },
-        },
-        {
-          $lookup: {
-            from: 'companyproducts',
-            localField: '_id',
-            foreignField: 'company_id',
-            as: 'companyproducts',
-          },
-        },
-        {
-          $lookup: {
-            from: 'products',
-            localField: 'companyproducts.product_id',
-            foreignField: '_id',
-            as: 'company_product_details',
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            company_name: 1,
-            company_image: { $ifNull: ['$company_image', null] },
-            company_category: { $arrayElemAt: ['$category.category_name', 0] },
-            company_ifric_id: 1,
-            company_address: '$address_1',
-            company_city: '$city',
-            company_country: '$country',
-            company_industry: '$industry',
-            company_products: {
-              $map: {
-                input: '$company_product_details',
-                as: 'prod',
-                in: '$$prod.product_name',
-              },
-            },
-            company_verified: 1,
-          },
-        },
-      ]);
+      const companies = await this.companyRepository.find({
+        order: { _id: 'DESC' },
+      });
+      const companyIds = companies.map((c) => c._id);
+      const mappings = companyIds.length
+        ? await this.companyCategoryMappingRepository.find({
+            where: { company_id: In(companyIds) },
+          })
+        : [];
+      const categoryIds = [...new Set(mappings.map((m) => m.category_id))];
+      const categories = categoryIds.length
+        ? await this.companyCategoryRepository.find({
+            where: { _id: In(categoryIds) },
+          })
+        : [];
+      const categoryNameById = new Map(
+        categories.map((c) => [c._id, c.category_name]),
+      );
+      const mappingByCompanyId = new Map(
+        mappings.map((m) => [m.company_id, m.category_id]),
+      );
+
+      const companyData = companies.map((company) => {
+        const categoryId = mappingByCompanyId.get(company._id);
+        return {
+          company_name: company.company_name,
+          company_image: company.company_image ?? null,
+          company_category: categoryId
+            ? categoryNameById.get(categoryId)
+            : undefined,
+          company_ifric_id: company.company_ifric_id,
+          company_address: company.address_1,
+          company_city: company.city,
+          company_country: company.country,
+          company_industry: company.industry,
+          company_products: [],
+          company_verified: company.company_verified,
+        };
+      });
 
       // Certificates are optional (see envConstants.certificatesEnabled) —
       // when disabled, or when ICID is unreachable, company listing should
@@ -1124,11 +1074,11 @@ export class CompanyService {
           companiesVerifiedResponse = {};
         }
       }
-      return companyData.map((company) => {
-        company.company_cert =
-          companiesVerifiedResponse[company.company_ifric_id] ?? false;
-        return company;
-      });
+      return companyData.map((company) => ({
+        ...company,
+        company_cert:
+          companiesVerifiedResponse[company.company_ifric_id] ?? false,
+      }));
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1140,75 +1090,37 @@ export class CompanyService {
     }
   }
 
+  // Ported from a self-join aggregation (Company -> CompanyTwin -> Company).
+  // The original's explicit $toString ObjectId casts on both sides of the
+  // join are unnecessary here — every id is already a plain string under
+  // this migration's ID strategy, so this is a genuinely simpler port.
   async getUniqueOwnerCompanies(company_ifric_id: string) {
     try {
-      return await this.companyModel.aggregate([
-        {
-          $match: { company_ifric_id },
-        },
-        {
-          $lookup: {
-            from: 'companytwins',
-            let: { companyId: { $toString: '$_id' } },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $eq: ['$manufacturer_company_id', '$$companyId'], // match manufacturer_company_id with _id of company
-                  },
-                },
-              },
-              // Group by owner_company_id to get unique values
-              {
-                $group: {
-                  _id: '$owner_company_id',
-                },
-              },
-            ],
-            as: 'twin',
-          },
-        },
-        { $unwind: '$twin' },
-        {
-          $lookup: {
-            from: 'companies',
-            let: { ownerId: '$twin._id' },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $eq: [{ $toString: '$_id' }, '$$ownerId'], // match each owner_company_id to _id of company
-                  },
-                },
-              },
-              {
-                $project: {
-                  _id: 1,
-                  company_name: 1,
-                  company_image: { $ifNull: ['$company_image', null] },
-                  company_ifric_id: 1,
-                  address_1: 1,
-                  city: 1,
-                  country: 1,
-                },
-              },
-            ],
-            as: 'owner_company',
-          },
-        },
-        { $unwind: '$owner_company' },
-        {
-          $project: {
-            _id: '$owner_company._id',
-            company_name: '$owner_company.company_name',
-            company_ifric_id: '$owner_company.company_ifric_id',
-            company_image: '$owner_company.company_image',
-            company_address: '$owner_company.address_1',
-            company_city: '$owner_company.city',
-            company_country: '$owner_company.country',
-          },
-        },
-      ]);
+      const company = await this.companyRepository.findOne({
+        where: { company_ifric_id },
+      });
+      if (!company) {
+        return [];
+      }
+      const twins = await this.companyTwinRepository.find({
+        where: { manufacturer_company_id: company._id },
+      });
+      const ownerIds = [...new Set(twins.map((t) => t.owner_company_id))];
+      if (!ownerIds.length) {
+        return [];
+      }
+      const owners = await this.companyRepository.find({
+        where: { _id: In(ownerIds) },
+      });
+      return owners.map((owner) => ({
+        _id: owner._id,
+        company_name: owner.company_name,
+        company_ifric_id: owner.company_ifric_id,
+        company_image: owner.company_image ?? null,
+        company_address: owner.address_1,
+        company_city: owner.city,
+        company_country: owner.country,
+      }));
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1222,7 +1134,9 @@ export class CompanyService {
 
   async getCompanyCategory(company_ifric_id: string) {
     try {
-      const companyData = await this.companyModel.find({ company_ifric_id });
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id },
+      });
       if (!companyData.length) {
         throw new HttpException(
           'No company found with the provided ID',
@@ -1230,18 +1144,19 @@ export class CompanyService {
         );
       }
 
-      const companyCategoryData = await this.companyCategoryMappingModel.find({
-        company_id: companyData[0].id,
-      });
+      const companyCategoryData =
+        await this.companyCategoryMappingRepository.find({
+          where: { company_id: companyData[0]._id },
+        });
       if (!companyCategoryData.length) {
         throw new HttpException(
           'No company category found with the provided ID',
           HttpStatus.NOT_FOUND,
         );
       }
-      const categoryDetails = await this.companyCategoryModel.findById(
-        companyCategoryData[0].category_id,
-      );
+      const categoryDetails = await this.companyCategoryRepository.findOne({
+        where: { _id: companyCategoryData[0].category_id },
+      });
       if (!categoryDetails) {
         throw new HttpException(
           'No category found with the provided ID',
@@ -1260,11 +1175,16 @@ export class CompanyService {
     }
   }
 
+  async getCompanyCategories() {
+    return this.companyCategoryRepository.find();
+  }
+
   async getManufacturerCompanies(count: number) {
     try {
-      const manufacturerCategoryData = await this.companyCategoryModel.find({
-        category_name: 'manufacturer',
-      });
+      const manufacturerCategoryData =
+        await this.companyCategoryRepository.find({
+          where: { category_name: 'manufacturer' },
+        });
       if (!manufacturerCategoryData.length) {
         throw new HttpException(
           'No category found with manufacturer category name',
@@ -1272,10 +1192,10 @@ export class CompanyService {
         );
       }
 
-      const companyIds = await this.companyCategoryMappingModel.distinct(
-        'company_id',
-        { category_id: manufacturerCategoryData[0]._id },
-      );
+      const mappings = await this.companyCategoryMappingRepository.find({
+        where: { category_id: manufacturerCategoryData[0]._id },
+      });
+      const companyIds = [...new Set(mappings.map((m) => m.company_id))];
 
       if (!companyIds.length) {
         throw new HttpException(
@@ -1283,23 +1203,21 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
-      return await this.companyModel
-        .aggregate([
-          {
-            $match: { _id: { $in: companyIds } },
-          },
-          {
-            $project: {
-              _id: 0,
-              company_name: 1,
-              company_image: { $ifNull: ['$company_image', null] },
-              company_category: { $literal: 'manufacturer' },
-              company_ifric_id: 1,
-            },
-          },
-        ])
-        .skip(count - 20)
-        .limit(20);
+
+      // Postgres errors on a negative OFFSET (Mongo silently clamps it to
+      // zero) — explicit clamp required to keep count < 20 working.
+      const offset = Math.max(count - 20, 0);
+      const companies = await this.companyRepository.find({
+        where: { _id: In(companyIds) },
+        skip: offset,
+        take: 20,
+      });
+      return companies.map((c) => ({
+        company_name: c.company_name,
+        company_image: c.company_image ?? null,
+        company_category: 'manufacturer',
+        company_ifric_id: c.company_ifric_id,
+      }));
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1311,11 +1229,15 @@ export class CompanyService {
     }
   }
 
+  // $regex/$options:'i' ported to ILIKE — a minor, accepted behavior
+  // difference: regex metacharacters in searched_text are matched literally
+  // by ILIKE instead of interpreted as regex syntax.
   async getSearchedManufacturerCompanies(searched_text: string) {
     try {
-      const manufacturerCategoryData = await this.companyCategoryModel.find({
-        category_name: 'manufacturer',
-      });
+      const manufacturerCategoryData =
+        await this.companyCategoryRepository.find({
+          where: { category_name: 'manufacturer' },
+        });
       if (!manufacturerCategoryData.length) {
         throw new HttpException(
           'No category found with manufacturer category name',
@@ -1323,10 +1245,10 @@ export class CompanyService {
         );
       }
 
-      const companyIds = await this.companyCategoryMappingModel.distinct(
-        'company_id',
-        { category_id: manufacturerCategoryData[0]._id },
-      );
+      const mappings = await this.companyCategoryMappingRepository.find({
+        where: { category_id: manufacturerCategoryData[0]._id },
+      });
+      const companyIds = [...new Set(mappings.map((m) => m.company_id))];
 
       if (!companyIds.length) {
         throw new HttpException(
@@ -1334,23 +1256,18 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
-      return await this.companyModel.aggregate([
-        {
-          $match: {
-            _id: { $in: companyIds },
-            company_name: { $regex: searched_text, $options: 'i' },
-          },
+      const companies = await this.companyRepository.find({
+        where: {
+          _id: In(companyIds),
+          company_name: ILike(`%${searched_text}%`),
         },
-        {
-          $project: {
-            _id: 0,
-            company_name: 1,
-            company_image: { $ifNull: ['$company_image', null] },
-            company_category: { $literal: 'manufacturer' },
-            company_ifric_id: 1,
-          },
-        },
-      ]);
+      });
+      return companies.map((c) => ({
+        company_name: c.company_name,
+        company_image: c.company_image ?? null,
+        company_category: 'manufacturer',
+        company_ifric_id: c.company_ifric_id,
+      }));
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1364,16 +1281,22 @@ export class CompanyService {
 
   async getManufacturerAndOwnerCompanies() {
     try {
-      const categoryData = await this.companyCategoryModel.find({
-        category_name: { $in: ['manufacturer', 'factory_owner'] },
+      const categoryData = await this.companyCategoryRepository.find({
+        where: { category_name: In(['manufacturer', 'factory_owner']) },
       });
       const categoryIds = categoryData.map((c) => c._id);
+      if (!categoryIds.length) {
+        return [];
+      }
 
-      const companyIds = await this.companyCategoryMappingModel.distinct(
-        'company_id',
-        { category_id: { $in: categoryIds } },
-      );
-      return this.companyModel.find({ _id: { $in: companyIds } });
+      const mappings = await this.companyCategoryMappingRepository.find({
+        where: { category_id: In(categoryIds) },
+      });
+      const companyIds = [...new Set(mappings.map((m) => m.company_id))];
+      if (!companyIds.length) {
+        return [];
+      }
+      return this.companyRepository.find({ where: { _id: In(companyIds) } });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1387,8 +1310,8 @@ export class CompanyService {
 
   async updateCompany(id: string, data: RegisterAuthDto) {
     try {
-      const companyData = await this.companyModel.find({
-        company_ifric_id: id,
+      const companyData = await this.companyRepository.find({
+        where: { company_ifric_id: id },
       });
       if (companyData.length === 0) {
         throw new HttpException(
@@ -1397,20 +1320,44 @@ export class CompanyService {
         );
       }
 
-      const companyId = companyData[0].id;
-      const response = await this.companyModel.findByIdAndUpdate(
-        companyId,
-        data,
-        { new: true },
-      );
-      const companyCategoryMappingData =
-        await this.companyCategoryMappingModel.find({
-          company_id: companyId,
+      // company_category isn't a Company column — it lives on
+      // CompanyCategoryMapping (see createCompany), so companyRepository.update
+      // below silently ignores it. Re-point the mapping row explicitly
+      // whenever a category change is requested.
+      if (data.company_category) {
+        const companyCategory = await this.companyCategoryRepository.findOne({
+          where: { category_name: data.company_category },
         });
-      const companyCategoryData = await this.companyCategoryModel.findById(
-        companyCategoryMappingData[0].category_id,
+        if (!companyCategory) {
+          throw new HttpException(
+            `Company category does not exist. Must be one of: ${COMPANY_CATEGORY_NAMES.join(', ')}`,
+            HttpStatus.NOT_FOUND,
+          );
+        }
+
+        const existingMapping =
+          await this.companyCategoryMappingRepository.findOne({
+            where: { company_id: companyData[0]._id },
+          });
+        if (existingMapping) {
+          await this.companyCategoryMappingRepository.update(
+            { _id: existingMapping._id },
+            { category_id: companyCategory._id },
+          );
+        } else {
+          await this.companyCategoryMappingRepository.save(
+            this.companyCategoryMappingRepository.create({
+              category_id: companyCategory._id,
+              company_id: companyData[0]._id,
+            }),
+          );
+        }
+      }
+
+      await this.companyRepository.update(
+        { _id: companyData[0]._id },
+        data as any,
       );
-      response['company_category'] = companyCategoryData.category_name;
       return {
         status: 204,
         message: 'Company Details Updated Successfully',
@@ -1428,10 +1375,8 @@ export class CompanyService {
 
   async updateAccessGroup(id: string, data: UpdateAccessGroupDto) {
     try {
-      const response = await this.accessGroupModel.findByIdAndUpdate(id, data, {
-        new: true,
-      });
-      if (!response) {
+      const result = await this.accessGroupRepository.update({ _id: id }, data);
+      if (!(result.affected > 0)) {
         throw new HttpException(
           'Specified Access Group Not Found',
           HttpStatus.NOT_FOUND,
@@ -1454,8 +1399,8 @@ export class CompanyService {
 
   async deleteCompany(id: string) {
     try {
-      const companyResponse = await this.companyModel.find({
-        company_ifric_id: id,
+      const companyResponse = await this.companyRepository.find({
+        where: { company_ifric_id: id },
       });
       if (companyResponse.length === 0) {
         throw new HttpException(
@@ -1464,28 +1409,38 @@ export class CompanyService {
         );
       }
 
-      const companyId = companyResponse[0].id;
-      await this.companyProductModel.deleteMany({ company_id: companyId });
-      await this.companyUserModel.deleteMany({ company_id: companyId });
-      await this.accessGroupModel.deleteMany({ company_id: companyId });
-      await this.companyCategoryMappingModel.deleteOne({
+      const companyId = companyResponse[0]._id;
+
+      // Fixed (per migration plan, not a Mongo-behavior-preserving port):
+      // fetch the company's users BEFORE deleting them below, so their
+      // UserProductAccessGroup rows can actually be cascade-deleted. The
+      // Mongo version re-queried CompanyUser for this AFTER already
+      // deleting them, so the cascade loop never ran and those rows were
+      // silently orphaned on every company delete.
+      const companyUser = await this.companyUserRepository.find({
+        where: { company_id: companyId },
+      });
+
+      await this.companyProductRepository.delete({ company_id: companyId });
+      await this.companyUserRepository.delete({ company_id: companyId });
+      await this.accessGroupRepository.delete({ company_id: companyId });
+      await this.companyCategoryMappingRepository.delete({
         company_id: companyId,
       });
-      await this.companyAssetModel.deleteMany({ company_id: companyId });
-      await this.companyGateWayModel.deleteMany({ company_id: companyId });
-      await this.companyServerModel.deleteMany({ company_id: companyId });
-      const companyUser = await this.companyUserModel.find({
-        company_id: companyId,
-      });
+      await this.companyAssetRepository.delete({ company_id: companyId });
+      await this.companyGateWayRepository.delete({ company_id: companyId });
+      await this.companyServerRepository.delete({ company_id: companyId });
       if (companyUser.length > 0) {
-        for (let i = 0; i < companyUser.length; i++) {
-          await this.userProductAccessGroupModel.deleteMany({
-            user_id: companyUser[i].id,
+        for (const user of companyUser) {
+          await this.userProductAccessGroupRepository.delete({
+            user_id: user._id,
           });
-          await this.companyUserModel.deleteOne({ _id: companyUser[i].id });
         }
       }
-      return await this.companyModel.deleteOne({ _id: id });
+      // Fixed: delete by the already-resolved internal _id, not the raw
+      // company_ifric_id parameter (the Mongo version passed `id` — the
+      // ifric id — directly as `_id`, which matched nothing).
+      return await this.companyRepository.delete({ _id: companyId });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1499,7 +1454,7 @@ export class CompanyService {
 
   async deleteAccessgroup(id: string) {
     try {
-      return await this.accessGroupModel.deleteOne({ _id: id });
+      return await this.accessGroupRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1513,7 +1468,7 @@ export class CompanyService {
 
   async deleteCompanyAsset(id: string) {
     try {
-      return await this.companyAssetModel.deleteOne({ asset_ifric_id: id });
+      return await this.companyAssetRepository.delete({ asset_ifric_id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1527,8 +1482,8 @@ export class CompanyService {
 
   async deleteCompanyAssets(assetIds: string[]) {
     try {
-      return await this.companyAssetModel.deleteMany({
-        asset_ifric_id: { $in: assetIds },
+      return await this.companyAssetRepository.delete({
+        asset_ifric_id: In(assetIds),
       });
     } catch (err) {
       if (err instanceof HttpException) {
@@ -1543,7 +1498,7 @@ export class CompanyService {
 
   async deleteCompanyGateway(id: string) {
     try {
-      return await this.companyGateWayModel.deleteOne({ _id: id });
+      return await this.companyGateWayRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1557,7 +1512,7 @@ export class CompanyService {
 
   async deleteCompanyServer(id: string) {
     try {
-      return await this.companyServerModel.deleteOne({ _id: id });
+      return await this.companyServerRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -1567,110 +1522,5 @@ export class CompanyService {
         throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
       }
     }
-  }
-
-  // Only used internally by createCompany — provisions the admin CompanyUser
-  // for a newly created company (not a public endpoint).
-  private async createAdminUser(data: UserAccessDto) {
-    const session = await this.connection.startSession();
-    session.startTransaction();
-    const temp_product_access_group_ids: string[] = [];
-
-    try {
-      // 1. Check if user already exists
-      const existingUser = await this.companyUserModel
-        .findOne({ user_email: data.user_email })
-        .session(session);
-      if (existingUser) {
-        throw new HttpException('User already exists', HttpStatus.CONFLICT);
-      }
-
-      // 2. Get company ID
-      const company = await this.companyModel
-        .findOne({ company_ifric_id: data.company_ifric_id })
-        .session(session);
-      if (!company) {
-        throw new HttpException('Company not found', HttpStatus.NOT_FOUND);
-      }
-      const companyId = company.id;
-
-      // 3. Create a refresh token — CompanyUser doesn't exist yet, so this
-      // just signs it; it's persisted below as part of the user doc itself.
-      const token = await this.signRefreshToken(companyId, data.user_email);
-
-      // 4. Encrypt password
-      const encryptedPassword = await this.hashPassword(data.user_password);
-
-      // 5. Save user
-      const user = await new this.companyUserModel({
-        company_id: companyId,
-        user_email: data.user_email,
-        user_password: encryptedPassword,
-        user_name: data.user_name,
-        jwt_token: token,
-        meta_data: {
-          created_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-          updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-          add_by: data.user_email,
-        },
-      }).save({ session });
-
-      // 6. Assign products + access groups. p.product is a plain product
-      // identifier (internal module name or external product_ifric_id),
-      // not a local catalog reference — see UserProductAccessGroup schema.
-      for (const p of data.products) {
-        const accessGroup = await this.accessGroupModel
-          .findOne({
-            company_id: companyId,
-            group_name: p.user_role,
-          })
-          .session(session);
-        if (!accessGroup) continue;
-
-        await new this.userProductAccessGroupModel({
-          user_id: user.id,
-          product_ifric_id: p.product,
-          access_group_id: accessGroup.id,
-        }).save({ session });
-        temp_product_access_group_ids.push(p.product);
-      }
-
-      // 7. Commit if all went fine
-      await session.commitTransaction();
-      return {
-        status: 201,
-        message: 'Admin User Created Successfully',
-        userId: user.id,
-        productAccessGroupIds: temp_product_access_group_ids,
-      };
-    } catch (err) {
-      if (err instanceof HttpException) throw err;
-      if (err.response)
-        throw new HttpException(err.response.data.message, err.response.status);
-      throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
-    } finally {
-      session.endSession();
-    }
-  }
-
-  // One-way password hashing, duplicated from AuthService — only used
-  // internally by createAdminUser. Passwords are never stored or returned
-  // in reversible form.
-  private async hashPassword(plainText: string): Promise<string> {
-    return bcrypt.hash(plainText, BCRYPT_SALT_ROUNDS);
-  }
-
-  // Signs (but does not persist) a refresh-token JWT — duplicated from
-  // AuthService.signRefreshToken, since createAdminUser needs to set
-  // CompanyUser.jwt_token as part of the initial document, before the user
-  // exists for AuthService's persist-and-update version to target.
-  private async signRefreshToken(
-    companyId: string,
-    userEmail: string,
-  ): Promise<string> {
-    return this.jwtService.signAsync(
-      { sub: companyId, user: userEmail, type: 'refresh' },
-      { secret: jwtConstants.secret, expiresIn: '30d' },
-    );
   }
 }

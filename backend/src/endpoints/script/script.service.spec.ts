@@ -15,22 +15,38 @@
 //
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { ScriptService } from './script.service';
-import { AccessGroup } from 'src/schemas/access_group.schema';
-import { CompanyCategory } from 'src/schemas/company_category.schema';
-import { Product } from 'src/schemas/products.schema';
+import { AccessGroup, CompanyCategory, Product } from 'src/entities';
+import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 
 describe('ScriptService', () => {
   let service: ScriptService;
+  let accessRepository: { create: jest.Mock; save: jest.Mock };
+  let companyCategoryRepository: { create: jest.Mock; save: jest.Mock };
 
   beforeEach(async () => {
+    accessRepository = {
+      create: jest.fn((d) => d),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+    companyCategoryRepository = {
+      create: jest.fn((d) => d),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ScriptService,
-        { provide: getModelToken(AccessGroup.name), useValue: {} },
-        { provide: getModelToken(CompanyCategory.name), useValue: {} },
-        { provide: getModelToken(Product.name), useValue: {} },
+        {
+          provide: getRepositoryToken(AccessGroup),
+          useValue: accessRepository,
+        },
+        {
+          provide: getRepositoryToken(CompanyCategory),
+          useValue: companyCategoryRepository,
+        },
+        { provide: getRepositoryToken(Product), useValue: {} },
       ],
     }).compile();
 
@@ -39,5 +55,15 @@ describe('ScriptService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('create', () => {
+    it('seeds exactly the predefined company-category taxonomy, including machine_builder', async () => {
+      await service.create();
+
+      expect(companyCategoryRepository.save).toHaveBeenCalledWith(
+        COMPANY_CATEGORY_NAMES.map((category_name) => ({ category_name })),
+      );
+    });
   });
 });
