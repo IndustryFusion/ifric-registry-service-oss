@@ -202,8 +202,22 @@ these, or crash-loops until they're set post-install):
 |---|---|---|
 | `secrets.hederaKeySecret` | unset | Set to enable `/certificate/*` |
 | `env.dbSsl`, `env.dbSslRejectUnauthorized`, `env.dbSslCa` | `false` / `true` / unset | TLS to an external Postgres — irrelevant to the bundled one (no TLS listener) |
-| `postgres.enabled`, `keycloak.enabled`, `icid.enabled` | `true` / `true` / `false` | Bundled vs. external per component — see the chart's own README for every combination |
 | `env.corsOrigin` | `http://localhost:3000` | Allowed browser origins |
+
+**Bundled vs. external** — Postgres and Keycloak default to bundled (the
+chart deploys them for you); ICID defaults the other way, to external
+(bring your own). Any of the three can be flipped by setting its
+`enabled` flag and supplying the matching external-connection values:
+
+| Component | Bundled | External |
+|---|---|---|
+| PostgreSQL (bundled by default) | `postgres.enabled=true` | `postgres.enabled=false` + `postgres.external.host`/`.port` |
+| Keycloak (bundled by default) | `keycloak.enabled=true` | `keycloak.enabled=false` + `env.keycloak.url`/`.realm` |
+| ICID (external by default) | `icid.enabled=true` (via `values-full.yaml`) | `icid.enabled=false` + `env.icidServiceBackendUrl` |
+
+These combine freely (e.g. bundled Keycloak + external Postgres). Full
+detail, including ICID's own MongoDB dependency and every combination:
+[`charts/ifric-registry-service/README.md`](charts/ifric-registry-service/README.md#topology-bundled-or-external-independently).
 
 ```bash
 helm install my-registry charts/ifric-registry-service \
