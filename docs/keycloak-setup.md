@@ -83,3 +83,73 @@ npm run backfill:keycloak-attributes
 Affected users need to log in again (or refresh) afterward to get a token
 carrying the new claims — an already-issued token doesn't retroactively
 gain them.
+
+## RBAC architecture
+
+How company/user scoping and permission checks actually work end to end —
+provisioning a user, minting a token, and enforcing a request — all built
+on the claims described above. RBAC in this app is **one `AccessGroup`
+role per user per company** (`UserAccessGroup`, unique on `user_id`) — no
+per-product dimension.
+
+```mermaid
+flowchart TB
+    subgraph P["1 · Provisioning (once, at user creation)"]
+        direction TB
+        CU["CompanyService.createCompany /<br/>AuthService.createCompanyUser"]
+        KC1["KeycloakService.createUser(...)<br/>Admin API, sets attributes:<br/>company_ifric_id, user_id"]
+        DB1[("CompanyUser row +<br/>UserAccessGroup(user_id, access_group_id)")]
+        AG[("AccessGroup<br/>create/read/update/delete flags<br/>e.g. 'admin' or 'read_only'")]
+        CU --> KC1
+        CU --> DB1
+        DB1 -. references .-> AG
+    end
+
+    subgraph L["2 · Login (per session)"]
+        direction TB
+        LI["POST /auth/login<br/>(email + password only)"]
+        ROPC["Keycloak ROPC grant<br/>(ifric client)"]
+        PM["Realm protocol mapper<br/>reads this user's stored attributes"]
+        TOK["access_token claims:<br/>company_ifric_id, user_id, sub, email, ..."]
+        LI --> ROPC --> PM --> TOK
+    end
+
+    subgraph R["3 · Every guarded request"]
+        direction TB
+        REQ["Incoming request<br/>Authorization: Bearer &lt;token&gt;"]
+        AG1["AuthGuard<br/>verifies signature via JWKS,<br/>sets request.user = decoded claims"]
+        DEC["@AuthUser() decorator<br/>hands claims to the controller"]
+        ACM["AccessControlService.assertCompanyMatch<br/>(claims.company_ifric_id === target company?)"]
+        APM["AccessControlService.assertPermission<br/>(claims.user_id's UserAccessGroup →<br/>AccessGroup flag for this action?)"]
+        ALLOW["Handler runs"]
+        DENY["403 Forbidden"]
+
+        REQ --> AG1 --> DEC --> ACM
+        ACM -- match --> APM
+        ACM -- mismatch --> DENY
+        APM -- flag true --> ALLOW
+        APM -- flag false/missing --> DENY
+    end
+
+    KC1 -. attributes stored on .-> ROPC
+    TOK -. bearer token used by .-> REQ
+    DB1 -. looked up by .-> APM
+```
+
+A few things worth noting from this picture:
+
+- **Two completely separate systems hold the pieces**: Keycloak owns
+  *identity* (who is this, is the signature valid) and never sees
+  `AccessGroup`/`UserAccessGroup`; Postgres owns *authorization* (what can
+  this user do) and never sees a password. The only bridge between them is
+  the pair of claims stamped at provisioning time and replayed at every
+  login.
+- **A token is a claim of identity, not a live permission check** — the
+  actual `create`/`read`/`update`/`delete` decision is always re-derived
+  from `UserAccessGroup`/`AccessGroup` at request time
+  (`AccessControlService`), never cached in the token itself. Changing a
+  user's role takes effect on their *next* request, no token
+  revocation needed.
+- **A missing `company_ifric_id`/`user_id` claim is a hard failure**, not
+  an implicit bypass — see [Backfilling existing users](#backfilling-existing-users)
+  above for the one case this happens (pre-migration accounts).
