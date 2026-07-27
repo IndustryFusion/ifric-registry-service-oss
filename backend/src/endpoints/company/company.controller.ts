@@ -35,6 +35,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CompanyService } from './company.service';
+import { AssetService } from './asset.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { CompanyCreationApiKeyGuard } from './company-creation-key.guard';
 import { AuthUser } from '../auth/auth-user.decorator';
@@ -45,18 +46,17 @@ import { AccessGroupDto } from '../auth/dto/access-group.dto';
 import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
 import { UpdateFactoryDto } from './dto/update-factory.dto';
+import { CreateAssetDto, UpdateAssetDto } from './dto/asset.dto';
 import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 
 @ApiTags('Company')
 @ApiBearerAuth('access-token')
 @Controller('company')
 export class CompanyController {
-  constructor(private readonly companyService: CompanyService) {}
-
-  // Product-URN-keyed lookups (manufacturer/owner/factory-location for a
-  // given product) live on ProductController instead — see
-  // src/endpoints/product/product.controller.ts (GET /product/:id,
-  // /product/:id/owner, /product/:id/factory-location).
+  constructor(
+    private readonly companyService: CompanyService,
+    private readonly assetService: AssetService,
+  ) {}
 
   // ===========================================================================
   // Factory-keyed lookups — start from a factory id
@@ -71,9 +71,10 @@ export class CompanyController {
   @ApiOperation({
     summary: 'Get all factories, optionally filtered by owner',
     description:
-      'Returns every known factory. Pass owner_company_ifric_id to filter ' +
-      'to just the factories owned by that company (the same id returned ' +
-      'as company_ifric_id by /company/owners/:id and /company/factories/:id/owner).',
+      'Pass owner_company_ifric_id to filter to just the factories owned ' +
+      'by that company (required to be your own company — this is not a ' +
+      'cross-company directory). Omitting it lists every factory across ' +
+      'every company.',
   })
   @ApiQuery({
     name: 'owner_company_ifric_id',
@@ -81,8 +82,11 @@ export class CompanyController {
     description: 'Filter to factories owned by this company',
     example: 'urn:ifric:ifx-eur-com-own-42ced491-b35d-41f7-9949-fcbb5fa4dcd9',
   })
-  getFactories(@Query('owner_company_ifric_id') ownerCompanyIfricId?: string) {
-    return this.companyService.getFactories(ownerCompanyIfricId);
+  getFactories(
+    @Query('owner_company_ifric_id') ownerCompanyIfricId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getFactories(ownerCompanyIfricId, authUser);
   }
 
   /**
@@ -93,10 +97,6 @@ export class CompanyController {
   @Get('factories/:id')
   @ApiOperation({
     summary: 'Get factory details for a factory id',
-    description:
-      'Returns the physical factory location for a factory id, the same ' +
-      'object shape as /company/factory-locations/:id but looked up ' +
-      'directly by factory id rather than via a product URN.',
   })
   @ApiParam({
     name: 'id',
@@ -104,8 +104,11 @@ export class CompanyController {
       'Factory id, e.g. urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
     example: 'urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
   })
-  getFactoryById(@Param('id') factoryId: string) {
-    return this.companyService.getFactoryById(factoryId);
+  getFactoryById(
+    @Param('id') factoryId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getFactoryById(factoryId, authUser);
   }
 
   /**
@@ -115,10 +118,6 @@ export class CompanyController {
   @Get('factories/:id/owner')
   @ApiOperation({
     summary: 'Get the owner company for a factory id',
-    description:
-      'Resolves a factory id to its owner_company_ifric_id and returns the ' +
-      'full owner company object, the same schema as /company/owners/:id ' +
-      'and /company/products/:id.',
   })
   @ApiParam({
     name: 'id',
@@ -126,8 +125,11 @@ export class CompanyController {
       'Factory id, e.g. urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
     example: 'urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
   })
-  getFactoryOwner(@Param('id') factoryId: string) {
-    return this.companyService.getFactoryOwner(factoryId);
+  getFactoryOwner(
+    @Param('id') factoryId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getFactoryOwner(factoryId, authUser);
   }
 
   /**
@@ -136,12 +138,10 @@ export class CompanyController {
   @UseGuards(AuthGuard)
   @Get('factories/:id/products')
   @ApiOperation({
-    summary: 'Get all product URNs located at a factory id',
+    summary: 'Get all asset URNs located at a factory id',
     description:
-      'Returns every product URN whose factory location (per ' +
-      '/company/factory-locations/:id) resolves to this factory id. ' +
-      'Pass any of the returned URNs to /company/products/:id to get that ' +
-      "product's manufacturer.",
+      'Returns every asset URN (see GET /company/assets/*) whose ' +
+      'factory_id resolves to this factory id.',
   })
   @ApiParam({
     name: 'id',
@@ -223,8 +223,7 @@ export class CompanyController {
   @ApiOperation({
     summary: 'Delete a factory',
     description:
-      'Deletes a factory. Fails with 409 if any company twin still ' +
-      'references this factory_id.',
+      'Deletes a factory. Fails with 409 if any asset still references this factory_id.',
   })
   @ApiParam({
     name: 'id',
@@ -239,14 +238,186 @@ export class CompanyController {
   }
 
   // ===========================================================================
-  // Company CRUD, access groups, physical assets (CompanyAsset/GateWay/
-  // Server)
+  // Assets — merges what used to be separate "physical asset" and "digital
+  // twin" concepts. A row starts physical-only (just company_ifric_id) and
+  // becomes a twin once owner_company_ifric_id (+ optionally factory_id)
+  // is set — same asset, same id, throughout. See AssetService.
+  // ===========================================================================
+
+  @UseGuards(AuthGuard)
+  @Post('assets')
+  @ApiOperation({
+    summary: 'Create an asset',
+    description:
+      'company_ifric_id is the registering/manufacturer company (always ' +
+      'required). Provide owner_company_ifric_id (+ optionally factory_id) ' +
+      'now to create it already "twinned", or add them later via PATCH.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['asset_ifric_id', 'company_ifric_id'],
+      properties: {
+        asset_ifric_id: {
+          type: 'string',
+          example: 'urn:asset:alpha-machine-001',
+        },
+        company_ifric_id: {
+          type: 'string',
+          example:
+            'urn:ifric:ifx-eur-com-own-42ced491-b35d-41f7-9949-fcbb5fa4dcd9',
+        },
+        owner_company_ifric_id: { type: 'string' },
+        factory_id: { type: 'string' },
+      },
+    },
+  })
+  createAsset(
+    @Body() data: CreateAssetDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.createAsset(data, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch('assets/:id')
+  @ApiOperation({
+    summary: 'Update an asset — setting owner_company_ifric_id "twins" it',
+  })
+  @ApiParam({ name: 'id', description: 'Asset URN (asset_ifric_id)' })
+  updateAsset(
+    @Param('id') id: string,
+    @Body() data: UpdateAssetDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.updateAsset(id, data, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('assets/bulk')
+  @ApiBody({ schema: { type: 'array', items: { type: 'string' } } })
+  deleteAssets(
+    @Body() assetIds: string[],
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.deleteAssets(assetIds, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Delete('assets/:id')
+  @ApiParam({ name: 'id', description: 'Asset URN (asset_ifric_id)' })
+  deleteAsset(@Param('id') id: string, @AuthUser() authUser: AuthTokenClaims) {
+    return this.assetService.deleteAsset(id, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets')
+  @ApiQuery({ name: 'company_ifric_id', required: true })
+  getAssets(
+    @Query('company_ifric_id') companyIfricId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getAssets(companyIfricId, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/manufacturer/:company_ifric_id')
+  getManufacturerAssets(
+    @Param('company_ifric_id') companyIfricId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getManufacturerAssets(companyIfricId, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/owner/:company_ifric_id')
+  getOwnerAssets(
+    @Param('company_ifric_id') companyIfricId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getOwnerAssets(companyIfricId, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get(
+    'assets/manufacturer/:manufacturer_company_ifric_id/owner/:owner_company_ifric_id',
+  )
+  getManufacturerOwnerAssets(
+    @Param('manufacturer_company_ifric_id') manufacturerIfricId: string,
+    @Param('owner_company_ifric_id') ownerIfricId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getManufacturerOwnerAssets(
+      manufacturerIfricId,
+      ownerIfricId,
+      authUser,
+    );
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/count')
+  @ApiQuery({
+    name: 'asset_ifric_ids',
+    required: true,
+    description: 'Comma-separated asset URNs',
+  })
+  getAssetCount(@Query('asset_ifric_ids') assetIfricIds: string) {
+    return this.assetService.getAssetCount((assetIfricIds ?? '').split(','));
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/count/:company_ifric_id')
+  getAssetCountByCompany(
+    @Param('company_ifric_id') companyIfricId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getAssetCountByCompany(companyIfricId, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/:id/manufacturer')
+  getAssetManufacturer(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getAssetManufacturer(id, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/:id/owner')
+  getAssetOwner(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getAssetOwner(id, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/:id/factory-location')
+  getAssetFactoryLocation(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getAssetFactoryLocation(id, authUser);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('assets/:id')
+  getAssetByAssetIfricId(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.assetService.getAssetByAssetIfricId(id, authUser);
+  }
+
+  // ===========================================================================
+  // Company CRUD, access groups, gateway/server
   // ===========================================================================
 
   @UseGuards(AuthGuard)
   @Post('company-asset')
   @ApiBody({
-    description: 'Details for creating a company asset',
+    description: 'Details for creating a company gateway/server',
     required: true,
     schema: {
       type: 'object',
@@ -254,17 +425,12 @@ export class CompanyController {
       properties: {
         type: {
           type: 'string',
-          enum: ['asset', 'gateway', 'server'],
-          example: 'asset',
+          enum: ['gateway', 'server'],
+          example: 'gateway',
         },
         company_ifric_id: {
           type: 'string',
           example: 'IFRIC12345',
-        },
-        asset_ifric_id: {
-          type: 'string',
-          description: 'Required when type is "asset"',
-          example: 'ASSET67890',
         },
         gateway_ifric_id: {
           type: 'string',
@@ -279,8 +445,11 @@ export class CompanyController {
       },
     },
   })
-  createCompanyAsset(@Body() data: CompanyAssetDto) {
-    return this.companyService.createCompanyAsset(data);
+  createCompanyAsset(
+    @Body() data: CompanyAssetDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.createCompanyAsset(data, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -467,24 +636,6 @@ export class CompanyController {
   }
 
   @UseGuards(AuthGuard)
-  @Get('/get-company-assets/:id')
-  getCompanyAssets(@Param('id') id: string) {
-    return this.companyService.getCompanyAssets(id);
-  }
-
-  @UseGuards(AuthGuard)
-  @Get('/get-company-assets-by-asset/:assetId')
-  getCompanyAssetsbyAsset(@Param('assetId') id: string) {
-    return this.companyService.getCompanyAssetsbyAsset(id);
-  }
-
-  @UseGuards(AuthGuard)
-  @Get('/get-company-asset-by-assetid/:asset_ifric_id')
-  getCompanyAssetByAssetId(@Param('asset_ifric_id') asset_ifric_id: string) {
-    return this.companyService.getCompanyAssetByAssetId(asset_ifric_id);
-  }
-
-  @UseGuards(AuthGuard)
   @Get('/get-company-access-group/:id')
   getCompanyAccessGroup(@Param('id') id: string) {
     return this.companyService.getCompanyAccessGroup(id);
@@ -525,16 +676,23 @@ export class CompanyController {
 
   @UseGuards(AuthGuard)
   @Get('/get-company-details-id/:id')
-  getCompanyDetailsByID(@Param('id') id: string) {
-    return this.companyService.getCompanyDetailsbyRecord(id);
+  getCompanyDetailsByID(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getCompanyDetailsbyRecord(id, authUser);
   }
 
   @UseGuards(AuthGuard)
   @Get('/get-company-contact-details/:company_ifric_id')
   getCompanyContactDetails(
     @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.companyService.getCompanyContactDetails(company_ifric_id);
+    return this.companyService.getCompanyContactDetails(
+      company_ifric_id,
+      authUser,
+    );
   }
 
   @Get('/companies/check')
@@ -579,8 +737,14 @@ export class CompanyController {
 
   @UseGuards(AuthGuard)
   @Get('/get-all-owner-companies/:company_ifric_id')
-  getUniqueOwnerCompanies(@Param('company_ifric_id') company_ifric_id: string) {
-    return this.companyService.getUniqueOwnerCompanies(company_ifric_id);
+  getUniqueOwnerCompanies(
+    @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getUniqueOwnerCompanies(
+      company_ifric_id,
+      authUser,
+    );
   }
 
   @UseGuards(AuthGuard)
@@ -726,8 +890,12 @@ export class CompanyController {
       ],
     },
   })
-  updateCompany(@Param('id') id: string, @Body() data: RegisterAuthDto) {
-    return this.companyService.updateCompany(id, data);
+  updateCompany(
+    @Param('id') id: string,
+    @Body() data: RegisterAuthDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.updateCompany(id, data, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -775,8 +943,11 @@ export class CompanyController {
 
   @UseGuards(AuthGuard)
   @Delete('/delete-company/:id')
-  deleteCompany(@Param('id') id: string) {
-    return this.companyService.deleteCompany(id);
+  deleteCompany(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.deleteCompany(id, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -786,26 +957,20 @@ export class CompanyController {
   }
 
   @UseGuards(AuthGuard)
-  @Delete('/delete-company-asset/:id')
-  deleteCompanyAsset(@Param('id') id: string) {
-    return this.companyService.deleteCompanyAsset(id);
-  }
-
-  @UseGuards(AuthGuard)
-  @Delete('/delete-bulk-company-assets')
-  deleteCompanyAssets(@Body() data: string[]) {
-    return this.companyService.deleteCompanyAssets(data);
-  }
-
-  @UseGuards(AuthGuard)
   @Delete('/delete-company-gateway/:id')
-  deleteCompanyGateway(@Param('id') id: string) {
-    return this.companyService.deleteCompanyGateway(id);
+  deleteCompanyGateway(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.deleteCompanyGateway(id, authUser);
   }
 
   @UseGuards(AuthGuard)
   @Delete('/delete-company-server/:id')
-  deleteCompanyServer(@Param('id') id: string) {
-    return this.companyService.deleteCompanyServer(id);
+  deleteCompanyServer(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.deleteCompanyServer(id, authUser);
   }
 }

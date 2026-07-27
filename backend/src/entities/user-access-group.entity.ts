@@ -14,9 +14,19 @@
 // limitations under the License.
 //
 
-export interface CompanyTwinDto {
-  owner_company_ifric_id: string;
-  manufacturer_ifric_id: string;
-  asset_ifric_id: string;
-  factory_id?: string;
+import { Column, Entity, Unique } from 'typeorm';
+import { BaseEntity } from '../database/base.entity';
+
+// One AccessGroup role per user — not per product (there is no product
+// dimension in this app's RBAC model). UNIQUE is required, not optional —
+// it's the ON CONFLICT target for the upsert in
+// AuthService.updateUserAccessGroup.
+@Entity('user_access_groups')
+@Unique(['user_id'])
+export class UserAccessGroup extends BaseEntity {
+  @Column({ type: 'char', length: 24, nullable: true })
+  user_id: string;
+
+  @Column({ type: 'char', length: 24, nullable: true })
+  access_group_id: string;
 }

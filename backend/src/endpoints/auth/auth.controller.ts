@@ -28,7 +28,7 @@ import {
 import { AuthService } from './auth.service';
 import { UpdateUserDetails } from './dto/update-auth.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
-import { UpdateUserProductAccessDto } from './dto/update-user-product-access.dto';
+import { UpdateUserAccessDto } from './dto/update-user-access.dto';
 import { AuthGuard } from './auth.guard';
 import { AuthUser } from './auth-user.decorator';
 import { AuthTokenClaims } from './auth-token-claims.interface';
@@ -65,28 +65,13 @@ export class AuthController {
           type: 'string',
           example: 'johndoe@example.com',
         },
-        products: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              product_name: {
-                type: 'string',
-                example: 'ProductA',
-              },
-              product_version: {
-                type: 'string',
-                example: 'v1.0',
-              },
-            },
-          },
-          example: [
-            { product_name: 'ProductA', product_version: 'v1.0' },
-            { product_name: 'ProductB', product_version: 'v2.1' },
-          ],
+        user_role: {
+          type: 'string',
+          example: 'admin',
+          description: 'Access group name (matches AccessGroup.group_name)',
         },
       },
-      required: ['company_ifric_id', 'user_name', 'user_email', 'products'],
+      required: ['company_ifric_id', 'user_name', 'user_email', 'user_role'],
     },
   })
   createCompanyUser(
@@ -112,12 +97,8 @@ export class AuthController {
           type: 'string',
           example: 'securepassword123',
         },
-        product_name: {
-          type: 'string',
-          example: 'Product A',
-        },
       },
-      required: ['email', 'password', 'product_name'],
+      required: ['email', 'password'],
     },
   })
   logIn(@Body() data: FindOneAuthDto) {
@@ -137,18 +118,13 @@ export class AuthController {
           example: 'user@example.com',
           description: 'The email of the user',
         },
-        product_name: {
-          type: 'string',
-          example: 'Product A',
-          description: 'The name of the product',
-        },
         company_id: {
           type: 'string',
           example: 'COMPANY_ID_123',
           description: 'The unique ID of the company',
         },
       },
-      required: ['email', 'product_name', 'company_id'],
+      required: ['email', 'company_id'],
     },
   })
   getIndexedData(@Body() data: FindIndexedDbAuthDto) {
@@ -220,15 +196,6 @@ export class AuthController {
   }
 
   @UseGuards(AuthGuard)
-  @Get('/get-user-specific-product-access')
-  getUserSpecificProductAccess(
-    @Query('product_name') product_name: string,
-    @Query('user_id') user_id: string,
-  ) {
-    return this.authService.getUserSpecificProductAccess(product_name, user_id);
-  }
-
-  @UseGuards(AuthGuard)
   @Get('check-company-admin/:email')
   async checkCompanyAdmin(@Param('email') email: string) {
     return this.authService.checkCompanyAdmin(email);
@@ -270,32 +237,23 @@ export class AuthController {
   @Patch('/update-user-access-group/:id')
   @ApiBody({
     description:
-      'For each entry, grants the user (CompanyUser :id) the named access ' +
-      'group role on the named product',
+      'Grants the user (CompanyUser :id) the named access group role.',
     required: true,
     schema: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          product: {
-            type: 'string',
-            example: 'Software',
-            description: 'Product name',
-          },
-          user_role: {
-            type: 'string',
-            example: 'admin',
-            description: 'Access group name (matches AccessGroup.group_name)',
-          },
+      type: 'object',
+      properties: {
+        user_role: {
+          type: 'string',
+          example: 'admin',
+          description: 'Access group name (matches AccessGroup.group_name)',
         },
-        required: ['product', 'user_role'],
       },
+      required: ['user_role'],
     },
   })
   updateUserAccessGroup(
     @Param('id') id: string,
-    @Body() data: UpdateUserProductAccessDto[],
+    @Body() data: UpdateUserAccessDto,
   ) {
     return this.authService.updateUserAccessGroup(id, data);
   }

@@ -47,11 +47,17 @@ or [Kubernetes Deployment](#kubernetes-deployment) before running anything.
 
 | Controller | Routes | Endpoints | Owns |
 |---|---|---|---|
-| Auth | `/auth/*` | 23 | Login, sessions, credential/user-lifecycle management — no company/product data of its own |
-| Company | `/company/*` | 40 | Company CRUD, access groups (RBAC roles), physical assets, factories |
-| Product | `/product/*` | 20 | External product tagging, digital twins |
+| Auth | `/auth/*` | 22 | Login, sessions, credential/user-lifecycle management — no company/asset data of its own |
+| Company | `/company/*` | 49 | Company CRUD, access groups (RBAC roles), factories, assets (see below), gateway/server |
+| Product | `/product/*` | 2 | Local product catalog only (id↔name lookup) — everything asset/digital-twin-related lives under `/company/assets/*` |
 | Certificate | `/certificate/*` | 5 | ICID-backed certificate issuance/verification — only registered when `HEDERA_KEY_SECRET` is set |
 | Script | `/script*` | 2 | One-time seed data for a fresh deployment (see [Usage Flow](#usage-flow)) |
+
+**Assets** (`/company/assets/*`) merge what used to be two separate ideas —
+a bare physical-asset tag and a manufacturer/owner/factory "digital twin"
+— into one object: a row starts physical-only and becomes a twin once
+`owner_company_ifric_id` (+ optionally `factory_id`) is set on it. See
+[`docs/api-reference.md`](docs/api-reference.md) for the full route list.
 
 Full per-endpoint reference, including which routes are public vs.
 Keycloak-guarded vs. additionally company/RBAC-scoped:
@@ -86,17 +92,18 @@ the target realm — this is a one-time manual step (the app fails fast at
 boot without them). Full walkthrough, for both local Docker and
 Kubernetes: [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
 
-**Getting and using a token:**
+**Getting and using a token:** RBAC in this app is **one `AccessGroup` role
+per user per company** — no per-product dimension — so login just needs
+credentials; the response's `access_group` field is that one role.
 
 ```bash
 curl -X POST http://localhost:4007/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "admin@acme.example",
-    "password": "your-password",
-    "product_name": "IFRIC Dashboard"
+    "password": "your-password"
   }'
-# → { "status": 200, "data": { "access_token": "...", "refresh_token": "...", ... } }
+# → { "status": 200, "data": { "access_token": "...", "refresh_token": "...", "access_group": { ... }, ... } }
 
 curl http://localhost:4007/company/get-company-details/<company_ifric_id> \
   -H "Authorization: Bearer <access_token>"
@@ -107,20 +114,20 @@ Tokens are short-lived; exchange the `refresh_token` for a new pair via
 
 ## Usage Flow
 
-A manufacturer tags a product; an owner company gets tagged as where that
-product physically lives. The two are always separate companies.
+A manufacturer creates an asset; an owner company gets tagged onto that
+same asset as where it physically lives (which is what "twins" it). The
+two are always separate companies.
 
 | Step | Call | What happens |
 |---|---|---|
 | 1 | `POST /script` | Seed once: default access groups + category taxonomy |
 | 2 | `POST /company/create-company` ×2 | Create the manufacturer and the owner. ICID mints a `company_ifric_id` for each, and a default admin user (full RBAC, its own Keycloak account) is provisioned automatically for each company |
 | 3 | `POST /auth/login` | Log in as one company's admin user → `access_token` |
-| 4 | `POST /auth/create-user/:admin_mail` | (Optional) create an additional user for that company, with a specific access-group role per product |
+| 4 | `POST /auth/create-user/:admin_mail` | (Optional) create an additional user for that company, with its own `AccessGroup` role |
 | 5 | `POST /company/factories` | Tag a factory location to the owner |
-| 6 | `POST /product/company-product` | Tag an external product to the manufacturer |
-| 7 | `POST /product/twin` | Link manufacturer + owner + factory as one digital twin |
-| 8 | `GET /product/:id/owner`, `GET /product/:id/factory-location` | Read it back — owner ≠ manufacturer, factory resolved |
-| 9 | `GET /company/factories/:id/products` | Read back the same link from the factory's side — every asset URN located there |
+| 6 | `POST /company/assets` | Manufacturer creates an asset, already tagged to the owner + factory in one call (`owner_company_ifric_id` + `factory_id`) — this is what "twins" it |
+| 7 | `GET /company/assets/:id/owner`, `GET /company/assets/:id/factory-location` | Read it back — owner ≠ manufacturer, factory resolved |
+| 8 | `GET /company/factories/:id/products` | Read back the same link from the factory's side — every asset URN located there |
 
 ```mermaid
 sequenceDiagram
@@ -138,16 +145,16 @@ sequenceDiagram
     App-->>You: access_token
     You->>App: POST /auth/create-user/:admin_mail (optional, additional user)
     You->>App: POST /company/factories (tag to owner)
-    You->>App: POST /product/company-product (tag external product)
-    You->>App: POST /product/twin (manufacturer + owner + factory)
+    You->>App: POST /company/assets (manufacturer + owner + factory, one call)
     You->>App: GET .../owner · .../factory-location · .../factories/:id/products
     App-->>You: owner ≠ manufacturer, factory resolved ✓
 ```
 
-**Good to know:** deleting a factory still referenced by a twin is blocked
-(`409`) — detach the twin first. `POST /company/company-asset` needs a
-`type: "asset" | "gateway" | "server"` field alongside the matching
-`*_ifric_id` field.
+**Good to know:** deleting a factory still referenced by an asset is
+blocked (`409`) — detach it first (`PATCH /company/assets/:id` with a
+different/no `factory_id`, or delete the asset). `POST /company/company-asset`
+is only for gateways/servers now (`type: "gateway" | "server"`) — assets
+go through `POST /company/assets` instead.
 
 ## ICID Dependency
 
@@ -244,12 +251,11 @@ troubleshooting, and migration notes:
 
 ## Notes / Troubleshooting
 
-- **Factory deletion is blocked (`409`)** while any digital twin still
-  references it — detach the twin (`PATCH /product/twin` with a different
-  `factory_id`, or delete it) first.
-- **`POST /company/company-asset`** needs a `type: "asset" | "gateway" |
-  "server"` field alongside the matching `*_ifric_id` field — it's one
-  endpoint for all three physical-resource kinds.
+- **Factory deletion is blocked (`409`)** while any asset still references
+  it — detach it first (`PATCH /company/assets/:id`, or delete it).
+- **`POST /company/company-asset`** is for gateways/servers only
+  (`type: "gateway" | "server"`) — use `POST /company/assets` to create an
+  asset.
 - **`DB_SSL` is off by default** and doesn't affect the bundled Compose/Helm
   Postgres (no TLS listener there regardless) — only relevant once you
   point at a real external instance.

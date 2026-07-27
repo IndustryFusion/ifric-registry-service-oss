@@ -14,18 +14,11 @@
 // limitations under the License.
 //
 
-interface Product {
-  product: string;
-  product_roles?: string[];
-  last_active?: string;
-  user_role: string;
-}
-
 export interface UserAccessDto {
   company_ifric_id: string;
   user_name: string;
   user_email: string;
-  products: Product[];
+  user_role: string;
 }
 
 export interface userDetailsByMail {

@@ -26,9 +26,7 @@ import {
   CompanyCategory,
   AccessGroup,
   CompanyCategoryMapping,
-  UserProductAccessGroup,
-  CompanyProduct,
-  CompanyTwin,
+  UserAccessGroup,
 } from 'src/entities';
 import { AccessControlService } from 'src/common/access-control.service';
 
@@ -46,9 +44,7 @@ describe('AuthController', () => {
         { provide: getRepositoryToken(CompanyCategory), useValue: {} },
         { provide: getRepositoryToken(AccessGroup), useValue: {} },
         { provide: getRepositoryToken(CompanyCategoryMapping), useValue: {} },
-        { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
-        { provide: getRepositoryToken(CompanyProduct), useValue: {} },
-        { provide: getRepositoryToken(CompanyTwin), useValue: {} },
+        { provide: getRepositoryToken(UserAccessGroup), useValue: {} },
         { provide: KeycloakService, useValue: {} },
         { provide: AccessControlService, useValue: {} },
       ],

@@ -19,20 +19,19 @@ import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { KeycloakService } from '../auth/keycloak.service';
 import { CompanyController } from './company.controller';
 import { CompanyService } from './company.service';
+import { AssetService } from './asset.service';
 import {
   Company,
-  CompanyTwin,
+  Asset,
   Factory,
   CompanyUser,
   CompanyCategory,
   CompanyCategoryMapping,
-  CompanyAsset,
   CompanyGateWay,
   CompanyServer,
-  CompanyProduct,
   Product,
   AccessGroup,
-  UserProductAccessGroup,
+  UserAccessGroup,
 } from 'src/entities';
 import { CertificateService } from '../certificate/certificate.service';
 import { AccessControlService } from 'src/common/access-control.service';
@@ -45,19 +44,18 @@ describe('CompanyController', () => {
       controllers: [CompanyController],
       providers: [
         CompanyService,
+        AssetService,
         { provide: getRepositoryToken(Company), useValue: {} },
-        { provide: getRepositoryToken(CompanyTwin), useValue: {} },
+        { provide: getRepositoryToken(Asset), useValue: {} },
         { provide: getRepositoryToken(Factory), useValue: {} },
         { provide: getRepositoryToken(CompanyUser), useValue: {} },
         { provide: getRepositoryToken(CompanyCategory), useValue: {} },
         { provide: getRepositoryToken(CompanyCategoryMapping), useValue: {} },
-        { provide: getRepositoryToken(CompanyAsset), useValue: {} },
         { provide: getRepositoryToken(CompanyGateWay), useValue: {} },
         { provide: getRepositoryToken(CompanyServer), useValue: {} },
-        { provide: getRepositoryToken(CompanyProduct), useValue: {} },
         { provide: getRepositoryToken(Product), useValue: {} },
         { provide: getRepositoryToken(AccessGroup), useValue: {} },
-        { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
+        { provide: getRepositoryToken(UserAccessGroup), useValue: {} },
         { provide: CertificateService, useValue: {} },
         { provide: KeycloakService, useValue: {} },
         { provide: AccessControlService, useValue: {} },
@@ -73,16 +71,21 @@ describe('CompanyController', () => {
   });
 
   describe('getFactories', () => {
-    it('delegates to CompanyService.getFactories with the owner filter', async () => {
+    it('delegates to CompanyService.getFactories with the owner filter and caller claims', async () => {
       const companyService = {
         getFactories: jest.fn().mockResolvedValue([{ factory_id: 'f1' }]),
       };
       (controller as any).companyService = companyService;
+      const authUser = { company_ifric_id: 'urn:ifric:owner-1', user_id: 'u1' };
 
-      const result = await controller.getFactories('urn:ifric:owner-1');
+      const result = await controller.getFactories(
+        'urn:ifric:owner-1',
+        authUser,
+      );
 
       expect(companyService.getFactories).toHaveBeenCalledWith(
         'urn:ifric:owner-1',
+        authUser,
       );
       expect(result).toEqual([{ factory_id: 'f1' }]);
     });
@@ -168,20 +171,49 @@ describe('CompanyController', () => {
   });
 
   describe('createCompanyAsset', () => {
-    it('delegates to CompanyService.createCompanyAsset with the type discriminator', async () => {
+    it('delegates to CompanyService.createCompanyAsset with the gateway/server type discriminator', async () => {
       const companyService = {
         createCompanyAsset: jest.fn().mockResolvedValue({ success: true }),
       };
       (controller as any).companyService = companyService;
       const data = {
-        type: 'asset',
+        type: 'gateway',
         company_ifric_id: 'urn:ifric:company-1',
-        asset_ifric_id: 'urn:asset:1',
+        gateway_ifric_id: 'urn:gateway:1',
+      };
+      const authUser = {
+        company_ifric_id: 'urn:ifric:company-1',
+        user_id: 'u1',
       };
 
-      const result = await controller.createCompanyAsset(data as any);
+      const result = await controller.createCompanyAsset(data as any, authUser);
 
-      expect(companyService.createCompanyAsset).toHaveBeenCalledWith(data);
+      expect(companyService.createCompanyAsset).toHaveBeenCalledWith(
+        data,
+        authUser,
+      );
+      expect(result).toEqual({ success: true });
+    });
+  });
+
+  describe('createAsset', () => {
+    it('delegates to AssetService.createAsset', async () => {
+      const assetService = {
+        createAsset: jest.fn().mockResolvedValue({ success: true }),
+      };
+      (controller as any).assetService = assetService;
+      const data = {
+        asset_ifric_id: 'urn:asset:1',
+        company_ifric_id: 'urn:ifric:company-1',
+      };
+      const authUser = {
+        company_ifric_id: 'urn:ifric:company-1',
+        user_id: 'u1',
+      };
+
+      const result = await controller.createAsset(data as any, authUser);
+
+      expect(assetService.createAsset).toHaveBeenCalledWith(data, authUser);
       expect(result).toEqual({ success: true });
     });
   });

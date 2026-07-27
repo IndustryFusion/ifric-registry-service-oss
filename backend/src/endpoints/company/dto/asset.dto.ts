@@ -14,14 +14,17 @@
 // limitations under the License.
 //
 
-import { Column, Entity } from 'typeorm';
-import { BaseEntity } from '../database/base.entity';
-
-@Entity('company_assets')
-export class CompanyAsset extends BaseEntity {
-  @Column({ type: 'char', length: 24, nullable: true })
-  company_id: string;
-
-  @Column({ type: 'varchar', nullable: true })
+// company_ifric_id is the registering/manufacturer company — always
+// required. owner_company_ifric_id/factory_id are what "twin-ify" the
+// asset — provide them now, or add them later via PATCH.
+export interface CreateAssetDto {
   asset_ifric_id: string;
+  company_ifric_id: string;
+  owner_company_ifric_id?: string;
+  factory_id?: string;
+}
+
+export interface UpdateAssetDto {
+  owner_company_ifric_id?: string;
+  factory_id?: string;
 }

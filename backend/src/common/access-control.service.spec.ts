@@ -20,14 +20,14 @@ import { AccessControlService } from './access-control.service';
 describe('AccessControlService', () => {
   let service: AccessControlService;
   let accessGroupRepository: { findOne: jest.Mock };
-  let userProductAccessGroupRepository: { find: jest.Mock };
+  let userAccessGroupRepository: { findOne: jest.Mock };
 
   beforeEach(() => {
     accessGroupRepository = { findOne: jest.fn() };
-    userProductAccessGroupRepository = { find: jest.fn() };
+    userAccessGroupRepository = { findOne: jest.fn() };
     service = new AccessControlService(
       accessGroupRepository as any,
-      userProductAccessGroupRepository as any,
+      userAccessGroupRepository as any,
     );
   });
 
@@ -62,13 +62,13 @@ describe('AccessControlService', () => {
       await expect(service.assertPermission({}, 'create')).rejects.toThrow(
         ForbiddenException,
       );
-      expect(userProductAccessGroupRepository.find).not.toHaveBeenCalled();
+      expect(userAccessGroupRepository.findOne).not.toHaveBeenCalled();
     });
 
-    it('allows an admin-role user to create (any AccessGroup grant with create=true)', async () => {
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-admin' },
-      ]);
+    it('allows an admin-role user to create (their one AccessGroup grant has create=true)', async () => {
+      userAccessGroupRepository.findOne.mockResolvedValue({
+        access_group_id: 'ag-admin',
+      });
       accessGroupRepository.findOne.mockResolvedValue({
         _id: 'ag-admin',
         create: true,
@@ -80,9 +80,9 @@ describe('AccessControlService', () => {
     });
 
     it('rejects a read_only-role user trying to create', async () => {
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-readonly' },
-      ]);
+      userAccessGroupRepository.findOne.mockResolvedValue({
+        access_group_id: 'ag-readonly',
+      });
       accessGroupRepository.findOne.mockResolvedValue(null); // no create=true match
 
       await expect(
@@ -91,9 +91,9 @@ describe('AccessControlService', () => {
     });
 
     it('allows a read_only-role user to read', async () => {
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-readonly' },
-      ]);
+      userAccessGroupRepository.findOne.mockResolvedValue({
+        access_group_id: 'ag-readonly',
+      });
       accessGroupRepository.findOne.mockResolvedValue({
         _id: 'ag-readonly',
         read: true,
@@ -104,33 +104,13 @@ describe('AccessControlService', () => {
       ).resolves.toBeUndefined();
     });
 
-    it('rejects when the user has no grants at all in the company', async () => {
-      userProductAccessGroupRepository.find.mockResolvedValue([]);
+    it('rejects when the user has no grant at all', async () => {
+      userAccessGroupRepository.findOne.mockResolvedValue(null);
 
       await expect(
         service.assertPermission({ user_id: 'user-1' }, 'read'),
       ).rejects.toThrow(ForbiddenException);
       expect(accessGroupRepository.findOne).not.toHaveBeenCalled();
-    });
-
-    it('scopes the grant lookup to a specific product when given', async () => {
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-1' },
-      ]);
-      accessGroupRepository.findOne.mockResolvedValue({
-        _id: 'ag-1',
-        create: true,
-      });
-
-      await service.assertPermission(
-        { user_id: 'user-1' },
-        'create',
-        'urn:product:alpha',
-      );
-
-      expect(userProductAccessGroupRepository.find).toHaveBeenCalledWith({
-        where: { user_id: 'user-1', product_ifric_id: 'urn:product:alpha' },
-      });
     });
   });
 });

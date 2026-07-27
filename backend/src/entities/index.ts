@@ -20,11 +20,9 @@ import { Product } from './product.entity';
 import { Company } from './company.entity';
 import { CompanyUser } from './company-user.entity';
 import { CompanyCategoryMapping } from './company-category-mapping.entity';
-import { UserProductAccessGroup } from './user-product-access-group.entity';
-import { CompanyProduct } from './company-product.entity';
-import { CompanyTwin } from './company-twin.entity';
+import { UserAccessGroup } from './user-access-group.entity';
+import { Asset } from './asset.entity';
 import { Certificate } from './certificate.entity';
-import { CompanyAsset } from './company-asset.entity';
 import { CompanyGateWay } from './company-gateway.entity';
 import { CompanyServer } from './company-server.entity';
 import { Factory } from './factory.entity';
@@ -40,11 +38,9 @@ export const entities = [
   Company,
   CompanyUser,
   CompanyCategoryMapping,
-  UserProductAccessGroup,
-  CompanyProduct,
-  CompanyTwin,
+  UserAccessGroup,
+  Asset,
   Certificate,
-  CompanyAsset,
   CompanyGateWay,
   CompanyServer,
   Factory,
@@ -57,11 +53,9 @@ export {
   Company,
   CompanyUser,
   CompanyCategoryMapping,
-  UserProductAccessGroup,
-  CompanyProduct,
-  CompanyTwin,
+  UserAccessGroup,
+  Asset,
   Certificate,
-  CompanyAsset,
   CompanyGateWay,
   CompanyServer,
   Factory,

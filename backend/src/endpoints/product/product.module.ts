@@ -18,32 +18,11 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ProductController } from './product.controller';
 import { ProductService } from './product.service';
-import {
-  Company,
-  CompanyUser,
-  CompanyTwin,
-  CompanyProduct,
-  Product,
-  AccessGroup,
-  UserProductAccessGroup,
-  Factory,
-} from 'src/entities';
+import { Product } from 'src/entities';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([
-      Company,
-      CompanyUser,
-      CompanyTwin,
-      CompanyProduct,
-      Product,
-      AccessGroup,
-      UserProductAccessGroup,
-      Factory,
-    ]),
-    AuthModule,
-  ],
+  imports: [TypeOrmModule.forFeature([Product]), AuthModule],
   controllers: [ProductController],
   providers: [ProductService],
 })

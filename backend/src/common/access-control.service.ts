@@ -16,8 +16,8 @@
 
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
-import { AccessGroup, UserProductAccessGroup } from 'src/entities';
+import { Repository } from 'typeorm';
+import { AccessGroup, UserAccessGroup } from 'src/entities';
 import { AuthTokenClaims } from '../endpoints/auth/auth-token-claims.interface';
 
 export type Permission = 'create' | 'read' | 'update' | 'delete';
@@ -27,16 +27,16 @@ export type Permission = 'create' | 'read' | 'update' | 'delete';
  * company_ifric_id/user_id claims a Keycloak protocol mapper projects onto
  * the access token (see README.md) instead of trusting body-supplied ids:
  *   1. the caller's own company matches the company they're acting on
- *   2. the caller's RBAC role (AccessGroup, via UserProductAccessGroup)
- *      actually grants the permission being exercised
+ *   2. the caller's one AccessGroup role (via UserAccessGroup) actually
+ *      grants the permission being exercised
  */
 @Injectable()
 export class AccessControlService {
   constructor(
     @InjectRepository(AccessGroup)
     private readonly accessGroupRepository: Repository<AccessGroup>,
-    @InjectRepository(UserProductAccessGroup)
-    private readonly userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
+    @InjectRepository(UserAccessGroup)
+    private readonly userAccessGroupRepository: Repository<UserAccessGroup>,
   ) {}
 
   // A missing claim means the caller's token predates the protocol-mapper
@@ -56,38 +56,28 @@ export class AccessControlService {
     }
   }
 
-  // productIfricId given: checks that specific UserProductAccessGroup ->
-  // AccessGroup grant (e.g. product CRUD). Omitted: for company-level
-  // actions not tied to one product (factory/user creation, company reads),
-  // checks whether the caller holds ANY AccessGroup grant in their company
-  // with this permission bit set — true for every product an "admin"-role
-  // user was granted at company/user creation, false for a "read_only" user
-  // asking for anything beyond `read`.
+  // Every user holds exactly one AccessGroup role (UserAccessGroup is
+  // unique on user_id) — checks whether that role's permission flag for
+  // the given action is set (true for "admin", false for "read_only"
+  // asking for anything beyond `read`).
   async assertPermission(
     claims: AuthTokenClaims,
     permission: Permission,
-    productIfricId?: string,
   ): Promise<void> {
     if (!claims.user_id) {
       throw new ForbiddenException('Token is missing a user_id claim');
     }
 
-    const grants = await this.userProductAccessGroupRepository.find({
-      where: {
-        user_id: claims.user_id,
-        ...(productIfricId && { product_ifric_id: productIfricId }),
-      },
+    const grant = await this.userAccessGroupRepository.findOne({
+      where: { user_id: claims.user_id },
     });
-    const accessGroupIds = grants.map((g) => g.access_group_id);
-    const matchingGroup = accessGroupIds.length
+    const accessGroup = grant
       ? await this.accessGroupRepository.findOne({
-          where: { _id: In(accessGroupIds), [permission]: true },
+          where: { _id: grant.access_group_id, [permission]: true },
         })
       : null;
-    if (!matchingGroup) {
-      throw new ForbiddenException(
-        `No ${permission} permission for this ${productIfricId ? 'product' : 'company'}`,
-      );
+    if (!accessGroup) {
+      throw new ForbiddenException(`No ${permission} permission`);
     }
   }
 }
