@@ -609,6 +609,7 @@ export class CompanyController {
     return this.companyService.createCompany(data);
   }
 
+  @UseGuards(AuthGuard)
   @Post('add-status-detail')
   @ApiBody({
     description: 'Add a status for a company',
@@ -706,6 +707,7 @@ export class CompanyController {
     );
   }
 
+  @UseGuards(AuthGuard)
   @Get('/get-company-details-by-email/:email')
   getCompanyDetailsByEmail(@Param('email') email: string) {
     return this.companyService.getCompanyDetailsByEmail(email);

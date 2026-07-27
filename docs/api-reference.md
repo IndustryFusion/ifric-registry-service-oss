@@ -109,7 +109,7 @@ instead check the caller against the named `company_ifric_id`.
 | POST | `/company/devices` | Auth + RBAC-scoped | Create a gateway/server (`type` discriminator — `"asset"` moved to `POST /company/assets`). |
 | POST | `/company/create-access-group/:id` | Auth | Create a custom RBAC role for a company. |
 | POST | `/company/create-company` | `X-API-Key` (`COMPANY_CREATION_API_KEY`), not a Keycloak token | Create a company: mints `company_ifric_id` via ICID, provisions a default admin user + RBAC roles, all in one transaction. |
-| POST | `/company/add-status-detail` | Public | Mark a company's verification status. |
+| POST | `/company/add-status-detail` | Auth | Mark a company's verification status. |
 | GET | `/company/get-company-access-group/:id` | Auth | List a company's RBAC roles. |
 | GET | `/company/get-access-group-by-group-name/:company_id/:group_name` | Auth | Look up one RBAC role by name. |
 | GET | `/company/get-access-group/:id` | Auth | Look up one RBAC role by id. |
@@ -118,7 +118,7 @@ instead check the caller against the named `company_ifric_id`.
 | GET | `/company/get-company-details-id/:id` | Auth + RBAC-scoped | Look up a company by its internal id. |
 | GET | `/company/get-company-contact-details/:company_ifric_id` | Auth + RBAC-scoped | A company's contact/admin details. |
 | GET | `/company/companies/check` | Public | Check whether a company name/registration number is already taken. |
-| GET | `/company/get-company-details-by-email/:email` | Public | Look up a company by its admin email. |
+| GET | `/company/get-company-details-by-email/:email` | Auth | Look up a company by its admin email. |
 | GET | `/company/get-company-details-by-name/:company_name` | Auth | Look up a company by name. |
 | GET | `/company/get-company-and-user-details/:company_ifric_id` | Auth + RBAC-scoped | Combined company + users + roles view. |
 | GET | `/company/get-all-companies` | Auth | List every company (with certificate-verification annotation if enabled). |
