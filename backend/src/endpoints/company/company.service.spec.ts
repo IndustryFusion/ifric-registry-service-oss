@@ -37,6 +37,12 @@ import {
 } from 'src/entities';
 import { CertificateService } from '../certificate/certificate.service';
 import { RegisterAuthDto } from '../auth/dto/register-auth.dto';
+import { AccessControlService } from 'src/common/access-control.service';
+
+const authorizedUser = {
+  company_ifric_id: 'urn:ifric:owner-1',
+  user_id: 'caller-1',
+};
 
 jest.mock('axios');
 
@@ -74,6 +80,10 @@ describe('CompanyService', () => {
   let dataSource: { createQueryRunner: jest.Mock };
   let mockQueryRunner: any;
   let idCounter: number;
+  let accessControlService: {
+    assertCompanyMatch: jest.Mock;
+    assertPermission: jest.Mock;
+  };
 
   beforeEach(async () => {
     companyRepository = {
@@ -108,6 +118,10 @@ describe('CompanyService', () => {
       save: jest.fn(),
     };
     accessGroupRepository = { find: jest.fn(), create: jest.fn((x) => x) };
+    accessControlService = {
+      assertCompanyMatch: jest.fn(),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+    };
 
     idCounter = 0;
     const mockManager = {
@@ -172,6 +186,7 @@ describe('CompanyService', () => {
         { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
         { provide: CertificateService, useValue: certificateService },
         { provide: KeycloakService, useValue: keycloakService },
+        { provide: AccessControlService, useValue: accessControlService },
         { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
@@ -239,15 +254,132 @@ describe('CompanyService', () => {
     });
   });
 
+  describe('getFactoryProducts', () => {
+    it('returns [] without checking access when the factory does not exist', async () => {
+      factoryRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getFactoryProducts('urn:ifric:missing', authorizedUser),
+      ).resolves.toEqual([]);
+      expect(accessControlService.assertCompanyMatch).not.toHaveBeenCalled();
+    });
+
+    it("checks the caller against the factory's owner company", async () => {
+      factoryRepository.findOne.mockResolvedValue({
+        owner_company_ifric_id: 'urn:ifric:owner-1',
+      });
+      companyTwinRepository.find.mockResolvedValue([
+        { asset_ifric_id: 'urn:asset:1' },
+      ]);
+
+      const result = await service.getFactoryProducts(
+        'urn:ifric:fac-1',
+        authorizedUser,
+      );
+
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        'urn:ifric:owner-1',
+      );
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        authorizedUser,
+        'read',
+      );
+      expect(result).toEqual(['urn:asset:1']);
+    });
+
+    it('rejects when the caller is scoped to a different company', async () => {
+      factoryRepository.findOne.mockResolvedValue({
+        owner_company_ifric_id: 'urn:ifric:owner-1',
+      });
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new Error('company mismatch');
+      });
+
+      await expect(
+        service.getFactoryProducts('urn:ifric:fac-1', {
+          company_ifric_id: 'urn:ifric:other-company',
+          user_id: 'user-1',
+        }),
+      ).rejects.toThrow('company mismatch');
+      expect(companyTwinRepository.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getCompanyDetails', () => {
+    it('checks the caller against the requested company before querying', async () => {
+      companyRepository.find.mockResolvedValue([
+        { company_ifric_id: 'urn:ifric:company-1' },
+      ]);
+
+      await service.getCompanyDetails('urn:ifric:company-1', authorizedUser);
+
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        'urn:ifric:company-1',
+      );
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        authorizedUser,
+        'read',
+      );
+    });
+
+    it('rejects when the caller is scoped to a different company', async () => {
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new HttpException('Forbidden', 403);
+      });
+
+      await expect(
+        service.getCompanyDetails('urn:ifric:company-1', {
+          company_ifric_id: 'urn:ifric:other-company',
+          user_id: 'user-1',
+        }),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(companyRepository.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getCompanyAndUserDetails', () => {
+    it('returns [] without checking access when the company does not exist', async () => {
+      companyRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getCompanyAndUserDetails('urn:ifric:missing', authorizedUser),
+      ).resolves.toEqual([]);
+      expect(accessControlService.assertCompanyMatch).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the caller is scoped to a different company', async () => {
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-1',
+        company_ifric_id: 'urn:ifric:company-1',
+      });
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new HttpException('Forbidden', 403);
+      });
+
+      await expect(
+        service.getCompanyAndUserDetails('urn:ifric:company-1', {
+          company_ifric_id: 'urn:ifric:other-company',
+          user_id: 'user-1',
+        }),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(companyCategoryMappingRepository.find).not.toHaveBeenCalled();
+    });
+  });
+
   describe('createFactory', () => {
     it('throws 404 when owner_company_ifric_id does not resolve to a company', async () => {
       companyRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.createFactory({
-          factory_id: 'urn:ifric:fac-1',
-          owner_company_ifric_id: 'urn:ifric:missing-owner',
-        }),
+        service.createFactory(
+          {
+            factory_id: 'urn:ifric:fac-1',
+            owner_company_ifric_id: 'urn:ifric:missing-owner',
+          },
+          authorizedUser,
+        ),
       ).rejects.toThrow(HttpException);
     });
 
@@ -258,10 +390,13 @@ describe('CompanyService', () => {
       ]);
 
       await expect(
-        service.createFactory({
-          factory_id: 'urn:ifric:fac-1',
-          owner_company_ifric_id: 'urn:ifric:owner-1',
-        }),
+        service.createFactory(
+          {
+            factory_id: 'urn:ifric:fac-1',
+            owner_company_ifric_id: 'urn:ifric:owner-1',
+          },
+          authorizedUser,
+        ),
       ).rejects.toThrow(HttpException);
     });
 
@@ -270,12 +405,23 @@ describe('CompanyService', () => {
       factoryRepository.find.mockResolvedValue([]);
       factoryRepository.save.mockResolvedValue({});
 
-      const result = await service.createFactory({
-        factory_id: 'urn:ifric:fac-1',
-        owner_company_ifric_id: 'urn:ifric:owner-1',
-        location_name: 'Plant 1',
-      });
+      const result = await service.createFactory(
+        {
+          factory_id: 'urn:ifric:fac-1',
+          owner_company_ifric_id: 'urn:ifric:owner-1',
+          location_name: 'Plant 1',
+        },
+        authorizedUser,
+      );
 
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        'urn:ifric:owner-1',
+      );
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        authorizedUser,
+        'create',
+      );
       expect(factoryRepository.save).toHaveBeenCalled();
       expect(result).toEqual({
         success: true,
@@ -287,20 +433,37 @@ describe('CompanyService', () => {
 
   describe('updateFactory', () => {
     it('throws 404 when the factory does not exist', async () => {
-      factoryRepository.update.mockResolvedValue({ affected: 0 });
+      factoryRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.updateFactory('urn:ifric:missing', { city: 'Munich' }),
+        service.updateFactory(
+          'urn:ifric:missing',
+          { city: 'Munich' },
+          authorizedUser,
+        ),
       ).rejects.toThrow(HttpException);
     });
 
     it('updates the factory when found', async () => {
+      factoryRepository.findOne.mockResolvedValue({
+        owner_company_ifric_id: 'urn:ifric:owner-1',
+      });
       factoryRepository.update.mockResolvedValue({ affected: 1 });
 
-      const result = await service.updateFactory('urn:ifric:fac-1', {
-        city: 'Munich',
-      });
+      const result = await service.updateFactory(
+        'urn:ifric:fac-1',
+        { city: 'Munich' },
+        authorizedUser,
+      );
 
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        'urn:ifric:owner-1',
+      );
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        authorizedUser,
+        'update',
+      );
       expect(factoryRepository.update).toHaveBeenCalledWith(
         { factory_id: 'urn:ifric:fac-1' },
         { city: 'Munich' },
@@ -311,22 +474,32 @@ describe('CompanyService', () => {
 
   describe('deleteFactory', () => {
     it('throws 409 when a company twin still references the factory', async () => {
+      factoryRepository.findOne.mockResolvedValue({
+        owner_company_ifric_id: 'urn:ifric:owner-1',
+      });
       companyTwinRepository.find.mockResolvedValue([
         { factory_id: 'urn:ifric:fac-1' },
       ]);
 
-      await expect(service.deleteFactory('urn:ifric:fac-1')).rejects.toThrow(
-        HttpException,
-      );
+      await expect(
+        service.deleteFactory('urn:ifric:fac-1', authorizedUser),
+      ).rejects.toThrow(HttpException);
       expect(factoryRepository.delete).not.toHaveBeenCalled();
     });
 
     it('deletes the factory when no twin references it', async () => {
+      factoryRepository.findOne.mockResolvedValue({
+        owner_company_ifric_id: 'urn:ifric:owner-1',
+      });
       companyTwinRepository.find.mockResolvedValue([]);
       factoryRepository.delete.mockResolvedValue({ affected: 1 });
 
-      await service.deleteFactory('urn:ifric:fac-1');
+      await service.deleteFactory('urn:ifric:fac-1', authorizedUser);
 
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        authorizedUser,
+        'delete',
+      );
       expect(factoryRepository.delete).toHaveBeenCalledWith({
         factory_id: 'urn:ifric:fac-1',
       });
@@ -488,6 +661,10 @@ describe('CompanyService', () => {
         baseDto.email,
         baseDto.admin_name,
         expect.any(String),
+        {
+          company_ifric_id: 'urn:ifric:new-company-1',
+          user_id: expect.any(String),
+        },
       );
       expect(mockQueryRunner.manager.create).not.toHaveBeenCalledWith(
         CompanyUser,
@@ -496,6 +673,16 @@ describe('CompanyService', () => {
       expect(mockQueryRunner.manager.create).not.toHaveBeenCalledWith(
         CompanyUser,
         expect.objectContaining({ jwt_token: expect.anything() }),
+      );
+    });
+
+    it('stamps the same pre-generated user_id onto both Keycloak and the CompanyUser row', async () => {
+      await service.createCompany({ ...baseDto });
+
+      const [, , , attributes] = keycloakService.createUser.mock.calls[0];
+      expect(mockQueryRunner.manager.create).toHaveBeenCalledWith(
+        CompanyUser,
+        expect.objectContaining({ _id: attributes.user_id }),
       );
     });
 

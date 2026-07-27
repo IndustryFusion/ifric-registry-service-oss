@@ -31,6 +31,8 @@ import {
 import { AddProductDto } from './dto/add-product.dto';
 import { CompanyTwinDto } from './dto/company-twin.dto';
 import { UpdateCompanyProductDto } from './dto/update-company-product.dto';
+import { AccessControlService } from 'src/common/access-control.service';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 
 @Injectable()
 export class ProductService {
@@ -48,6 +50,7 @@ export class ProductService {
     @InjectRepository(UserProductAccessGroup)
     private userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
     @InjectRepository(Factory) private factoryRepository: Repository<Factory>,
+    private readonly accessControlService: AccessControlService,
   ) {}
 
   async createCompanyTwin(data: CompanyTwinDto) {
@@ -123,8 +126,14 @@ export class ProductService {
   // not grant any UserProductAccessGroup rows: RBAC over the internal
   // module catalog (see AuthService) is a separate concept from tagging an
   // external product to a company.
-  async addCompanyProduct(data: AddProductDto) {
+  async addCompanyProduct(data: AddProductDto, authUser: AuthTokenClaims) {
     try {
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        data.company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'create');
+
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: data.company_ifric_id },
       });
@@ -635,12 +644,29 @@ export class ProductService {
 
   async getProductFactoryLocation(
     productUrn: string,
+    authUser: AuthTokenClaims,
   ): Promise<Record<string, any>> {
     const twin = await this.companyTwinRepository.findOne({
       where: { asset_ifric_id: productUrn },
     });
+    if (!twin) {
+      return {
+        factory: null,
+        message: `No factory data found for product URN: ${productUrn}`,
+      };
+    }
+
+    const ownerCompany = await this.companyRepository.findOne({
+      where: { _id: twin.owner_company_id },
+    });
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      ownerCompany?.company_ifric_id,
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
+
     const factory =
-      twin?.factory_id &&
+      twin.factory_id &&
       (await this.factoryRepository.findOne({
         where: { factory_id: twin.factory_id },
       }));

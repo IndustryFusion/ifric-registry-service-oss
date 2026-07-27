@@ -28,6 +28,15 @@ import {
   UserProductAccessGroup,
   Factory,
 } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
+
+// Every call below is pre-authorized — these tests exercise
+// addCompanyProduct/getProductFactoryLocation's own logic, not
+// AccessControlService's (see access-control.service.spec.ts for that).
+const authorizedUser = {
+  company_ifric_id: 'urn:ifric:company-1',
+  user_id: 'user-1',
+};
 
 describe('ProductService', () => {
   let service: ProductService;
@@ -49,7 +58,11 @@ describe('ProductService', () => {
     delete: jest.Mock;
   };
   let userProductAccessGroupRepository: { find: jest.Mock };
-  let factoryRepository: { find: jest.Mock };
+  let factoryRepository: { find: jest.Mock; findOne: jest.Mock };
+  let accessControlService: {
+    assertCompanyMatch: jest.Mock;
+    assertPermission: jest.Mock;
+  };
 
   beforeEach(async () => {
     companyRepository = { find: jest.fn(), findOne: jest.fn() };
@@ -74,11 +87,16 @@ describe('ProductService', () => {
     };
 
     userProductAccessGroupRepository = { find: jest.fn() };
-    factoryRepository = { find: jest.fn() };
+    factoryRepository = { find: jest.fn(), findOne: jest.fn() };
+    accessControlService = {
+      assertCompanyMatch: jest.fn(),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProductService,
+        { provide: AccessControlService, useValue: accessControlService },
         { provide: getRepositoryToken(Company), useValue: companyRepository },
         {
           provide: getRepositoryToken(CompanyUser),
@@ -158,14 +176,52 @@ describe('ProductService', () => {
   });
 
   describe('addCompanyProduct', () => {
+    it('rejects (and never touches the DB) when the caller is scoped to a different company', async () => {
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new Error('company mismatch');
+      });
+
+      await expect(
+        service.addCompanyProduct(
+          {
+            company_ifric_id: 'urn:ifric:company-1',
+            product_ifric_id: 'urn:product:widget',
+          },
+          { company_ifric_id: 'urn:ifric:other-company', user_id: 'user-1' },
+        ),
+      ).rejects.toThrow('company mismatch');
+      expect(companyRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the caller lacks create permission', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      accessControlService.assertPermission.mockRejectedValue(
+        new Error('no create permission'),
+      );
+
+      await expect(
+        service.addCompanyProduct(
+          {
+            company_ifric_id: 'urn:ifric:company-1',
+            product_ifric_id: 'urn:product:widget',
+          },
+          authorizedUser,
+        ),
+      ).rejects.toThrow('no create permission');
+      expect(companyProductRepository.save).not.toHaveBeenCalled();
+    });
+
     it('throws 404 when the company does not exist', async () => {
       companyRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.addCompanyProduct({
-          company_ifric_id: 'urn:ifric:missing',
-          product_ifric_id: 'urn:product:widget',
-        }),
+        service.addCompanyProduct(
+          {
+            company_ifric_id: 'urn:ifric:missing',
+            product_ifric_id: 'urn:product:widget',
+          },
+          authorizedUser,
+        ),
       ).rejects.toThrow(HttpException);
     });
 
@@ -173,10 +229,13 @@ describe('ProductService', () => {
       companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
 
       await expect(
-        service.addCompanyProduct({
-          company_ifric_id: 'urn:ifric:company-1',
-          product_ifric_id: '',
-        }),
+        service.addCompanyProduct(
+          {
+            company_ifric_id: 'urn:ifric:company-1',
+            product_ifric_id: '',
+          },
+          authorizedUser,
+        ),
       ).rejects.toThrow(HttpException);
     });
 
@@ -187,10 +246,13 @@ describe('ProductService', () => {
       ]);
 
       await expect(
-        service.addCompanyProduct({
-          company_ifric_id: 'urn:ifric:company-1',
-          product_ifric_id: 'urn:product:widget',
-        }),
+        service.addCompanyProduct(
+          {
+            company_ifric_id: 'urn:ifric:company-1',
+            product_ifric_id: 'urn:product:widget',
+          },
+          authorizedUser,
+        ),
       ).rejects.toThrow(HttpException);
     });
 
@@ -199,11 +261,14 @@ describe('ProductService', () => {
       companyProductRepository.find.mockResolvedValue([]);
       companyProductRepository.save.mockResolvedValue({});
 
-      const result = await service.addCompanyProduct({
-        company_ifric_id: 'urn:ifric:company-1',
-        product_ifric_id: 'urn:product:widget',
-        billing_id: 'BILL-1',
-      });
+      const result = await service.addCompanyProduct(
+        {
+          company_ifric_id: 'urn:ifric:company-1',
+          product_ifric_id: 'urn:product:widget',
+          billing_id: 'BILL-1',
+        },
+        authorizedUser,
+      );
 
       expect(companyProductRepository.create).toHaveBeenCalledWith({
         product_ifric_id: 'urn:product:widget',
@@ -447,6 +512,71 @@ describe('ProductService', () => {
         _id: 'company-product-id',
       });
       expect(userProductAccessGroupRepository.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getProductFactoryLocation', () => {
+    it('returns a null-factory message when no twin matches the URN, without checking access', async () => {
+      companyTwinRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.getProductFactoryLocation(
+        'urn:product:missing',
+        authorizedUser,
+      );
+
+      expect(result).toEqual({
+        factory: null,
+        message: 'No factory data found for product URN: urn:product:missing',
+      });
+      expect(accessControlService.assertCompanyMatch).not.toHaveBeenCalled();
+    });
+
+    it("checks the twin's owner company against the caller's claim", async () => {
+      companyTwinRepository.findOne.mockResolvedValue({
+        owner_company_id: 'owner-1',
+        factory_id: 'urn:ifric:fac-1',
+      });
+      companyRepository.findOne.mockResolvedValue({
+        company_ifric_id: 'urn:ifric:company-1',
+      });
+      factoryRepository.findOne.mockResolvedValue({
+        factory_id: 'urn:ifric:fac-1',
+      });
+
+      await service.getProductFactoryLocation(
+        'urn:product:widget',
+        authorizedUser,
+      );
+
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        'urn:ifric:company-1',
+      );
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        authorizedUser,
+        'read',
+      );
+    });
+
+    it('rejects when the caller is scoped to a different company than the owner', async () => {
+      companyTwinRepository.findOne.mockResolvedValue({
+        owner_company_id: 'owner-1',
+        factory_id: 'urn:ifric:fac-1',
+      });
+      companyRepository.findOne.mockResolvedValue({
+        company_ifric_id: 'urn:ifric:company-1',
+      });
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new Error('company mismatch');
+      });
+
+      await expect(
+        service.getProductFactoryLocation('urn:product:widget', {
+          company_ifric_id: 'urn:ifric:other-company',
+          user_id: 'user-1',
+        }),
+      ).rejects.toThrow('company mismatch');
+      expect(factoryRepository.findOne).not.toHaveBeenCalled();
     });
   });
 });

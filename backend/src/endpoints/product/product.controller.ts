@@ -33,6 +33,8 @@ import {
 } from '@nestjs/swagger';
 import { ProductService } from './product.service';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuthUser } from '../auth/auth-user.decorator';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 import { AddProductDto } from './dto/add-product.dto';
 import { CompanyTwinDto } from './dto/company-twin.dto';
 import { UpdateCompanyProductDto } from './dto/update-company-product.dto';
@@ -106,8 +108,11 @@ export class ProductController {
     description: 'Product URN (CompanyTwin.asset_ifric_id)',
     example: 'urn:product:alpha-machine-001',
   })
-  getProductFactoryLocation(@Param('id') productUrn: string) {
-    return this.productService.getProductFactoryLocation(productUrn);
+  getProductFactoryLocation(
+    @Param('id') productUrn: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.productService.getProductFactoryLocation(productUrn, authUser);
   }
 
   // ===========================================================================
@@ -144,8 +149,11 @@ export class ProductController {
       required: ['company_ifric_id', 'product_ifric_id'],
     },
   })
-  addCompanyProduct(@Body() data: AddProductDto) {
-    return this.productService.addCompanyProduct(data);
+  addCompanyProduct(
+    @Body() data: AddProductDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.productService.addCompanyProduct(data, authUser);
   }
 
   /**

@@ -28,6 +28,7 @@ import {
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiHeader,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -35,6 +36,9 @@ import {
 } from '@nestjs/swagger';
 import { CompanyService } from './company.service';
 import { AuthGuard } from '../auth/auth.guard';
+import { CompanyCreationApiKeyGuard } from './company-creation-key.guard';
+import { AuthUser } from '../auth/auth-user.decorator';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 import { RegisterAuthDto, AddStatusDto } from '../auth/dto/register-auth.dto';
 import { CompanyAssetDto } from '../auth/dto/company-asset.dto';
 import { AccessGroupDto } from '../auth/dto/access-group.dto';
@@ -145,8 +149,11 @@ export class CompanyController {
       'Factory id, e.g. urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
     example: 'urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
   })
-  getFactoryProducts(@Param('id') factoryId: string) {
-    return this.companyService.getFactoryProducts(factoryId);
+  getFactoryProducts(
+    @Param('id') factoryId: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getFactoryProducts(factoryId, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -185,8 +192,11 @@ export class CompanyController {
       },
     },
   })
-  createFactory(@Body() data: CreateFactoryDto) {
-    return this.companyService.createFactory(data);
+  createFactory(
+    @Body() data: CreateFactoryDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.createFactory(data, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -200,8 +210,12 @@ export class CompanyController {
     description: 'Factory id',
     example: 'urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
   })
-  updateFactory(@Param('id') id: string, @Body() data: UpdateFactoryDto) {
-    return this.companyService.updateFactory(id, data);
+  updateFactory(
+    @Param('id') id: string,
+    @Body() data: UpdateFactoryDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.updateFactory(id, data, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -217,8 +231,11 @@ export class CompanyController {
     description: 'Factory id',
     example: 'urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205',
   })
-  deleteFactory(@Param('id') id: string) {
-    return this.companyService.deleteFactory(id);
+  deleteFactory(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.deleteFactory(id, authUser);
   }
 
   // ===========================================================================
@@ -313,6 +330,16 @@ export class CompanyController {
     return this.companyService.createAccessGroup(id, data);
   }
 
+  @UseGuards(CompanyCreationApiKeyGuard)
+  @ApiHeader({
+    name: 'X-API-Key',
+    description:
+      'Placeholder gate ahead of a real external-API-token flow — must ' +
+      'match COMPANY_CREATION_API_KEY. No Keycloak bearer token is ' +
+      "required here, since the company's users have no Keycloak accounts " +
+      'yet at creation time.',
+    required: true,
+  })
   @Post('create-company')
   @ApiBody({
     description: 'Details for creating a company',
@@ -489,8 +516,11 @@ export class CompanyController {
 
   @UseGuards(AuthGuard)
   @Get('/get-company-details/:id')
-  getCompanyDetails(@Param('id') id: string) {
-    return this.companyService.getCompanyDetails(id);
+  getCompanyDetails(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.getCompanyDetails(id, authUser);
   }
 
   @UseGuards(AuthGuard)
@@ -533,8 +563,12 @@ export class CompanyController {
   @Get('/get-company-and-user-details/:company_ifric_id')
   getCompanyAndUserDetails(
     @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.companyService.getCompanyAndUserDetails(company_ifric_id);
+    return this.companyService.getCompanyAndUserDetails(
+      company_ifric_id,
+      authUser,
+    );
   }
 
   @UseGuards(AuthGuard)

@@ -171,11 +171,14 @@ export class KeycloakService {
 
   // Returns the new Keycloak user id. temporary: false — the generated
   // password is immediately usable, matching this app's existing UX (no
-  // forced-change-on-first-login flow exists today).
+  // forced-change-on-first-login flow exists today). `attributes` (e.g.
+  // company_ifric_id/user_id) are stored on the Keycloak user record and
+  // projected into access tokens via a realm protocol mapper — see README.
   async createUser(
     email: string,
     name: string,
     password: string,
+    attributes?: Record<string, string>,
   ): Promise<string> {
     const adminToken = await this.getAdminToken();
     try {
@@ -189,6 +192,11 @@ export class KeycloakService {
           credentials: [
             { type: 'password', value: password, temporary: false },
           ],
+          ...(attributes && {
+            attributes: Object.fromEntries(
+              Object.entries(attributes).map(([key, value]) => [key, [value]]),
+            ),
+          }),
         },
         { headers: { Authorization: `Bearer ${adminToken}` } },
       );
@@ -229,6 +237,39 @@ export class KeycloakService {
     } catch (err) {
       throw new HttpException(
         err?.response?.data?.errorMessage ?? 'Failed to update Keycloak email',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // Backfills company_ifric_id/user_id attributes onto a Keycloak user
+  // created before the protocol-mapper migration — see
+  // backend/scripts/backfill-keycloak-user-attributes.ts.
+  async setUserAttributes(
+    email: string,
+    attributes: Record<string, string>,
+  ): Promise<void> {
+    const [adminToken, userId] = await Promise.all([
+      this.getAdminToken(),
+      this.findUserIdByEmail(email),
+    ]);
+    if (!userId) {
+      throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+    }
+    try {
+      await axios.put(
+        `${this.adminUrl}/users/${userId}`,
+        {
+          attributes: Object.fromEntries(
+            Object.entries(attributes).map(([key, value]) => [key, [value]]),
+          ),
+        },
+        { headers: { Authorization: `Bearer ${adminToken}` } },
+      );
+    } catch (err) {
+      throw new HttpException(
+        err?.response?.data?.errorMessage ??
+          'Failed to update Keycloak user attributes',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }

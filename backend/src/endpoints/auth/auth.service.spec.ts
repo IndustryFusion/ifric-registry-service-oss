@@ -30,6 +30,7 @@ import {
   CompanyProduct,
   CompanyTwin,
 } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -67,6 +68,10 @@ describe('AuthService', () => {
     delete: jest.Mock;
   };
   let accessGroupRepository: { findOne: jest.Mock; find: jest.Mock };
+  let accessControlService: {
+    assertCompanyMatch: jest.Mock;
+    assertPermission: jest.Mock;
+  };
 
   beforeEach(async () => {
     keycloakService = {
@@ -110,11 +115,16 @@ describe('AuthService', () => {
     };
 
     accessGroupRepository = { findOne: jest.fn(), find: jest.fn() };
+    accessControlService = {
+      assertCompanyMatch: jest.fn(),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: CACHE_MANAGER, useValue: {} },
+        { provide: AccessControlService, useValue: accessControlService },
         { provide: getRepositoryToken(Company), useValue: companyRepository },
         {
           provide: getRepositoryToken(CompanyUser),
@@ -430,6 +440,75 @@ describe('AuthService', () => {
   });
 
   describe('createCompanyUser', () => {
+    it('rejects (without touching Keycloak) when the caller is scoped to a different company', async () => {
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new Error('company mismatch');
+      });
+
+      await expect(
+        service.createCompanyUser(
+          {
+            user_email: 'newuser@example.com',
+            user_name: 'New User',
+            company_ifric_id: 'urn:ifric:company-1',
+            products: [],
+          } as any,
+          'admin@example.com',
+          { company_ifric_id: 'urn:ifric:other-company', user_id: 'caller-1' },
+        ),
+      ).rejects.toThrow('company mismatch');
+      expect(keycloakService.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the caller lacks create permission', async () => {
+      accessControlService.assertPermission.mockRejectedValue(
+        new Error('no create permission'),
+      );
+
+      await expect(
+        service.createCompanyUser(
+          {
+            user_email: 'newuser@example.com',
+            user_name: 'New User',
+            company_ifric_id: 'urn:ifric:company-1',
+            products: [],
+          } as any,
+          'admin@example.com',
+          { company_ifric_id: 'urn:ifric:company-1', user_id: 'caller-1' },
+        ),
+      ).rejects.toThrow('no create permission');
+      expect(keycloakService.createUser).not.toHaveBeenCalled();
+    });
+
+    it("sources meta_data.add_by from the caller's verified token email, not the unverified admin_mail param", async () => {
+      companyUserRepository.find.mockResolvedValue([]);
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      companyUserRepository.save.mockResolvedValue({ _id: 'new-user-1' });
+
+      await service.createCompanyUser(
+        {
+          user_email: 'newuser@example.com',
+          user_name: 'New User',
+          company_ifric_id: 'urn:ifric:company-1',
+          products: [],
+        } as any,
+        'spoofed-admin@example.com',
+        {
+          company_ifric_id: 'urn:ifric:company-1',
+          user_id: 'caller-1',
+          email: 'real-caller@example.com',
+        },
+      );
+
+      expect(companyUserRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meta_data: expect.objectContaining({
+            add_by: 'real-caller@example.com',
+          }),
+        }),
+      );
+    });
+
     it('provisions the user in Keycloak instead of hashing a local password', async () => {
       companyUserRepository.find.mockResolvedValue([]); // no existing user
       companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
@@ -445,12 +524,17 @@ describe('AuthService', () => {
           products: [{ product: 'urn:product:widget', user_role: 'admin' }],
         } as any,
         'admin@example.com',
+        { company_ifric_id: 'urn:ifric:company-1', user_id: 'caller-1' },
       );
 
       expect(keycloakService.createUser).toHaveBeenCalledWith(
         'newuser@example.com',
         'New User',
         expect.any(String),
+        {
+          company_ifric_id: 'urn:ifric:company-1',
+          user_id: expect.any(String),
+        },
       );
       expect(companyUserRepository.create).toHaveBeenCalledWith(
         expect.not.objectContaining({

@@ -29,6 +29,7 @@ import {
   UserProductAccessGroup,
   Factory,
 } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
 
 describe('ProductController', () => {
   let controller: ProductController;
@@ -50,6 +51,7 @@ describe('ProductController', () => {
         },
         { provide: getRepositoryToken(Factory), useValue: {} },
         { provide: KeycloakService, useValue: {} },
+        { provide: AccessControlService, useValue: {} },
       ],
     }).compile();
 
@@ -89,9 +91,16 @@ describe('ProductController', () => {
         product_ifric_id: 'urn:product:widget',
       };
 
-      const result = await controller.addCompanyProduct(data as any);
+      const authUser = {
+        company_ifric_id: 'urn:ifric:company-1',
+        user_id: 'u1',
+      };
+      const result = await controller.addCompanyProduct(data as any, authUser);
 
-      expect(productService.addCompanyProduct).toHaveBeenCalledWith(data);
+      expect(productService.addCompanyProduct).toHaveBeenCalledWith(
+        data,
+        authUser,
+      );
       expect(result).toEqual({ success: true });
     });
   });

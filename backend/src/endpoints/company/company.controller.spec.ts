@@ -35,6 +35,7 @@ import {
   UserProductAccessGroup,
 } from 'src/entities';
 import { CertificateService } from '../certificate/certificate.service';
+import { AccessControlService } from 'src/common/access-control.service';
 
 describe('CompanyController', () => {
   let controller: CompanyController;
@@ -59,6 +60,7 @@ describe('CompanyController', () => {
         { provide: getRepositoryToken(UserProductAccessGroup), useValue: {} },
         { provide: CertificateService, useValue: {} },
         { provide: KeycloakService, useValue: {} },
+        { provide: AccessControlService, useValue: {} },
         { provide: getDataSourceToken(), useValue: {} },
       ],
     }).compile();
@@ -112,9 +114,10 @@ describe('CompanyController', () => {
         owner_company_ifric_id: 'urn:ifric:owner-1',
       };
 
-      const result = await controller.createFactory(data as any);
+      const authUser = { company_ifric_id: 'urn:ifric:owner-1', user_id: 'u1' };
+      const result = await controller.createFactory(data as any, authUser);
 
-      expect(companyService.createFactory).toHaveBeenCalledWith(data);
+      expect(companyService.createFactory).toHaveBeenCalledWith(data, authUser);
       expect(result).toEqual({ success: true });
     });
   });
@@ -127,14 +130,17 @@ describe('CompanyController', () => {
       (controller as any).companyService = companyService;
       const data = { city: 'Munich' };
 
+      const authUser = { company_ifric_id: 'urn:ifric:owner-1', user_id: 'u1' };
       const result = await controller.updateFactory(
         'urn:ifric:fac-1',
         data as any,
+        authUser,
       );
 
       expect(companyService.updateFactory).toHaveBeenCalledWith(
         'urn:ifric:fac-1',
         data,
+        authUser,
       );
       expect(result).toEqual({ status: 204 });
     });
@@ -147,10 +153,15 @@ describe('CompanyController', () => {
       };
       (controller as any).companyService = companyService;
 
-      const result = await controller.deleteFactory('urn:ifric:fac-1');
+      const authUser = { company_ifric_id: 'urn:ifric:owner-1', user_id: 'u1' };
+      const result = await controller.deleteFactory(
+        'urn:ifric:fac-1',
+        authUser,
+      );
 
       expect(companyService.deleteFactory).toHaveBeenCalledWith(
         'urn:ifric:fac-1',
+        authUser,
       );
       expect(result).toEqual({ deletedCount: 1 });
     });

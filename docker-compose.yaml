@@ -90,7 +90,10 @@ services:
     environment:
       # Overrides whatever DB_* vars are in backend/.env — the compose
       # topology (service name "postgres") is fixed by this file, not
-      # something each user should have to hand-edit into .env.
+      # something each user should have to hand-edit into .env. DB_SSL is
+      # deliberately left out of this override (and out of backend/.env by
+      # default) — the bundled postgres service above has no TLS listener,
+      # so DB_SSL stays unset/off here regardless of what's in .env.
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=ifric

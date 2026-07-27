@@ -46,6 +46,9 @@ import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
 import { UpdateFactoryDto } from './dto/update-factory.dto';
 import { envConstants } from 'src/common/env.constants';
+import { generateId } from 'src/database/generate-id';
+import { AccessControlService } from 'src/common/access-control.service';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 
 // Default internal-module product identifiers granted to every new
 // company/admin user — placeholders, replace with your own module lineup
@@ -85,6 +88,7 @@ export class CompanyService {
     private userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
     private readonly certificateService: CertificateService,
     private keycloakService: KeycloakService,
+    private readonly accessControlService: AccessControlService,
     @InjectDataSource() private readonly dataSource: DataSource,
   ) {}
 
@@ -145,14 +149,29 @@ export class CompanyService {
     return owner;
   }
 
-  async getFactoryProducts(factoryId: string): Promise<string[]> {
+  async getFactoryProducts(
+    factoryId: string,
+    authUser: AuthTokenClaims,
+  ): Promise<string[]> {
+    const factory = await this.factoryRepository.findOne({
+      where: { factory_id: factoryId },
+    });
+    if (!factory) {
+      return [];
+    }
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      factory.owner_company_ifric_id,
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
+
     const twins = await this.companyTwinRepository.find({
       where: { factory_id: factoryId },
     });
     return twins.map((twin) => twin.asset_ifric_id);
   }
 
-  async createFactory(data: CreateFactoryDto) {
+  async createFactory(data: CreateFactoryDto, authUser: AuthTokenClaims) {
     try {
       const ownerCompany = await this.companyRepository.find({
         where: { company_ifric_id: data.owner_company_ifric_id },
@@ -163,6 +182,12 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        data.owner_company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'create');
+
       const existing = await this.factoryRepository.find({
         where: { factory_id: data.factory_id },
       });
@@ -186,8 +211,27 @@ export class CompanyService {
     }
   }
 
-  async updateFactory(factoryId: string, data: UpdateFactoryDto) {
+  async updateFactory(
+    factoryId: string,
+    data: UpdateFactoryDto,
+    authUser: AuthTokenClaims,
+  ) {
     try {
+      const factory = await this.factoryRepository.findOne({
+        where: { factory_id: factoryId },
+      });
+      if (!factory) {
+        throw new HttpException(
+          'No factory found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        factory.owner_company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'update');
+
       const result = await this.factoryRepository.update(
         { factory_id: factoryId },
         data,
@@ -210,8 +254,23 @@ export class CompanyService {
     }
   }
 
-  async deleteFactory(factoryId: string) {
+  async deleteFactory(factoryId: string, authUser: AuthTokenClaims) {
     try {
+      const factory = await this.factoryRepository.findOne({
+        where: { factory_id: factoryId },
+      });
+      if (!factory) {
+        throw new HttpException(
+          'No factory found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        factory.owner_company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'delete');
+
       const twinsAtFactory = await this.companyTwinRepository.find({
         where: { factory_id: factoryId },
       });
@@ -386,16 +445,28 @@ export class CompanyService {
         throw new HttpException('User already exists', HttpStatus.CONFLICT);
       }
 
+      // Pre-generated so it can be stamped onto the Keycloak identity below
+      // before the CompanyUser row exists — BaseEntity.assignId() only
+      // fills _id in when it's unset, so passing it explicitly here is
+      // preserved as-is.
+      const adminUserId = generateId();
+
       // Provision the identity in Keycloak — credentials live there, not
-      // in this table.
+      // in this table. company_ifric_id/user_id are stored as Keycloak user
+      // attributes and projected into access tokens via a realm protocol
+      // mapper (see README.md), so every company-scoped endpoint can check
+      // the caller's own company/user against the request instead of
+      // trusting body-supplied ids.
       await this.keycloakService.createUser(
         data.email,
         data.admin_name,
         temporaryPassword,
+        { company_ifric_id: data.company_ifric_id, user_id: adminUserId },
       );
       const user = await queryRunner.manager.save(
         CompanyUser,
         queryRunner.manager.create(CompanyUser, {
+          _id: adminUserId,
           company_id: company._id,
           user_email: data.email,
           user_name: data.admin_name,
@@ -782,8 +853,11 @@ export class CompanyService {
     }
   }
 
-  async getCompanyDetails(id: string) {
+  async getCompanyDetails(id: string, authUser: AuthTokenClaims) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'read');
+
       return await this.companyRepository.find({
         where: { company_ifric_id: id },
       });
@@ -930,7 +1004,10 @@ export class CompanyService {
   // absent, regardless of what products are actually tagged. Reproduced
   // as-is here (not "fixed") since this port's job is behavioral parity,
   // not a product-catalog redesign.
-  async getCompanyAndUserDetails(company_ifric_id: string) {
+  async getCompanyAndUserDetails(
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const company = await this.companyRepository.findOne({
         where: { company_ifric_id },
@@ -938,6 +1015,8 @@ export class CompanyService {
       if (!company) {
         return [];
       }
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       const mapping = await this.companyCategoryMappingRepository.find({
         where: { company_id: company._id },

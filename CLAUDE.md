@@ -45,6 +45,12 @@ the app first, e.g. `npm run start:dev &`) — see
 point at; `npm run migration:generate` diffs entities against the current
 schema to draft a new one. Run against a fresh database before first boot —
 the app does not apply migrations itself (`synchronize: false` always).
+`backend/src/database/data-source.ts` (used by both the CLI and, via
+duplicated options, `app.module.ts`) reads `DB_SSL`/
+`DB_SSL_REJECT_UNAUTHORIZED`/`DB_SSL_CA` from `process.env` directly rather
+than through `env.constants.ts`, so the migration CLI keeps working with a
+minimal env (no Keycloak/ICID vars) — both files build the actual `ssl`
+option via the shared, dependency-free `database/pg-ssl.util.ts`.
 
 CI (`.github/workflows/ci.yaml`) runs `npm ci`, `lint`, `build`, `test` against
 a real `postgres:16` service container — no mocking of the DB at the CI level
@@ -67,9 +73,13 @@ Copy `backend/.env.example` to `backend/.env`. `DB_HOST`, `DB_NAME`,
 (`backend/src/common/env.constants.ts`) if any of these is missing.
 `DB_PORT`/`DB_USER`/`DB_PASSWORD` default to `5432`/`ifric`/`ifric`;
 `KEYCLOAK_CLIENT_ID`/`KEYCLOAK_ADMIN_CLIENT_ID` default to
-`ifric`/`ifric-admin`. `HEDERA_KEY_SECRET` is the one fully optional var:
-it's certificate-only, and its presence is what turns the certificate
-feature on — see the `CertificateModule` bullet below. Without a reachable
+`ifric`/`ifric-admin`. `HEDERA_KEY_SECRET` is fully optional: it's
+certificate-only, and its presence is what turns the certificate feature on
+— see the `CertificateModule` bullet below. `DB_SSL`/
+`DB_SSL_REJECT_UNAUTHORIZED`/`DB_SSL_CA` are also fully optional and off by
+default, controlling only whether the `pg` connection to Postgres uses TLS
+(client-side only — the bundled docker-compose/Helm Postgres has no TLS
+listener); see `backend/src/database/pg-ssl.util.ts`. Without a reachable
 ICID, company creation fails at call time (not at boot); without a reachable
 Keycloak, nothing auth-related works at all (there is no local fallback).
 

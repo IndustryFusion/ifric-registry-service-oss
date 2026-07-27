@@ -29,6 +29,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CompanyModule } from './endpoints/company/company.module';
 import { ProductModule } from './endpoints/product/product.module';
+import { AccessControlModule } from './common/access-control.module';
 import { entities, AccessGroup, CompanyCategory, Product } from './entities';
 
 dotenv.config();
@@ -43,6 +44,7 @@ dotenv.config();
       username: envConstants.dbUser,
       password: envConstants.dbPassword,
       database: envConstants.dbName,
+      ssl: envConstants.dbSsl,
       entities,
       synchronize: false,
     }),
@@ -57,6 +59,7 @@ dotenv.config();
       max: 1000000,
       skip: ['token', 'refresh_token', 'grant_type'], // Add this line
     }),
+    AccessControlModule,
     AuthModule,
     CompanyModule,
     CertificateModule,

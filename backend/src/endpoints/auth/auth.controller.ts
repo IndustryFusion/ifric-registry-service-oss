@@ -30,6 +30,8 @@ import { UpdateUserDetails } from './dto/update-auth.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserProductAccessDto } from './dto/update-user-product-access.dto';
 import { AuthGuard } from './auth.guard';
+import { AuthUser } from './auth-user.decorator';
+import { AuthTokenClaims } from './auth-token-claims.interface';
 import { UserAccessDto } from './dto/user-access-dto';
 import { FindOneAuthDto, FindIndexedDbAuthDto } from './dto/find-auth-dto';
 import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
@@ -90,8 +92,9 @@ export class AuthController {
   createCompanyUser(
     @Param('admin_mail') admin_mail: string,
     @Body() data: UserAccessDto,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.authService.createCompanyUser(data, admin_mail);
+    return this.authService.createCompanyUser(data, admin_mail, authUser);
   }
 
   @Post('login')

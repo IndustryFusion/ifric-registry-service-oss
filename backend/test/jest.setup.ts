@@ -27,3 +27,4 @@ process.env.KEYCLOAK_REALM ??= 'ifric';
 process.env.KEYCLOAK_CLIENT_SECRET ??= 'test-keycloak-client-secret';
 process.env.KEYCLOAK_ADMIN_CLIENT_SECRET ??=
   'test-keycloak-admin-client-secret';
+process.env.COMPANY_CREATION_API_KEY ??= 'test-company-creation-api-key';

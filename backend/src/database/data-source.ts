@@ -16,6 +16,7 @@
 
 import * as dotenv from 'dotenv';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import { buildPgSslOption } from './pg-ssl.util';
 
 dotenv.config();
 
@@ -25,6 +26,13 @@ dotenv.config();
 // TypeORM CLI (migration:generate/migration:run use this file directly).
 // Entities/migrations grow one feature module at a time as the Mongo->
 // Postgres migration proceeds — see the plan for the phase breakdown.
+//
+// The `ssl` option below is the one piece of connection config that isn't
+// duplicated by hand: it's built by the shared, dependency-free
+// pg-ssl.util.ts helper, since this file deliberately reads DB_SSL* (and
+// every other DB_* var) straight from process.env rather than importing
+// env.constants.ts — that would pull env.constants.ts's Keycloak/ICID
+// fail-fast checks into a plain migration run.
 export const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',
   host: process.env.DB_HOST || 'localhost',
@@ -32,6 +40,11 @@ export const dataSourceOptions: DataSourceOptions = {
   username: process.env.DB_USER || 'ifric',
   password: process.env.DB_PASSWORD || 'ifric',
   database: process.env.DB_NAME || 'ifric_registry_service',
+  ssl: buildPgSslOption({
+    enabled: process.env.DB_SSL === 'true',
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+    ca: process.env.DB_SSL_CA || undefined,
+  }),
   entities: [__dirname + '/../entities/*.entity{.ts,.js}'],
   migrations: [__dirname + '/../migrations/*{.ts,.js}'],
   synchronize: false,

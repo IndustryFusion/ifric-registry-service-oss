@@ -1,100 +1,111 @@
 # Ifric Registry Service
 
-Open-source, multi-tenant registry for companies, users, role-based access
-control, physical/IoT assets, and digital twins. Built with
-[NestJS](https://nestjs.com/) + PostgreSQL (via [TypeORM](https://typeorm.io/)),
-authenticated via [Keycloak](https://www.keycloak.org/).
+Ifric Registry Service is an open-source, multi-tenant registry for
+companies, users, role-based access control, physical/IoT assets, and
+digital twins. It's built with [NestJS](https://nestjs.com/) and
+PostgreSQL (via [TypeORM](https://typeorm.io/)). Authentication has no
+built-in implementation of its own — [Keycloak](https://www.keycloak.org/)
+is the sole identity provider for every guarded route, with no local
+fallback. Company creation and Hedera-backed certificates additionally
+depend on [ICID](https://github.com/IndustryFusion/icidservice), a
+separate open-source service that mints each company's canonical id. The
+repo ships both a Docker Compose setup and a Helm chart, so the same app
+can be run locally or deployed to Kubernetes with the same configuration
+shape.
 
-**Contents:** [Architecture](#architecture) ·
-[Quick start](#quick-start) ·
-[Core concepts](#core-concepts) ·
-[Usage flow](#usage-flow) ·
-[Authentication](#authentication) ·
-[Environment variables](#environment-variables) ·
-[Running with Docker](#running-with-docker) ·
-[Deploying with Helm](#deploying-with-helm) ·
-[ICID integration](#icid-integration) ·
-[API documentation](#api-documentation) ·
-[Testing](#testing)
+## Prerequisites
 
-## Architecture
+What you need on hand *before* following any of the setup steps below —
+which of these actually matter depends on which path you take:
 
-```mermaid
-flowchart LR
-    Client(["Client / Swagger UI"])
-
-    subgraph App["ifric-registry-service"]
-        direction TB
-        Auth["Auth — /auth"]
-        Company["Company — /company"]
-        Product["Product — /product"]
-        Cert["Certificate — /certificate"]
-        Script["Script — /script"]
-    end
-
-    PG[("PostgreSQL")]
-    ICID[("ICID<br/>separate service")]
-    KC[("Keycloak<br/>separate service")]
-
-    Client --> Auth & Company & Product & Cert & Script
-    Auth --- PG
-    Company --- PG
-    Product --- PG
-    Cert --- PG
-    Script --- PG
-    Auth -. "login / tokens / user mgmt" .-> KC
-    Company -. "mint company_ifric_id" .-> ICID
-    Cert -. "issue / verify certs" .-> ICID
-```
-
-Every module needs PostgreSQL. All authentication needs Keycloak (no local
-fallback). Company creation and certificates additionally need ICID.
-
-| Module | Routes | Owns |
-|---|---|---|
-| Auth | `/auth/*` | Login, sessions, password management — no company/product data |
-| Company | `/company/*` | Company CRUD, access groups, physical assets, factories |
-| Product | `/product/*` | Product tagging, digital twins |
-| Certificate | `/certificate/*` | ICID-backed certificate issuance/verification |
-| Script | `/script` | One-time seed data (see [Usage flow](#usage-flow)) |
-
-## Quick start
-
-The fastest path is Docker — it brings up Postgres + Keycloak for you:
-
-```bash
-docker compose up --build
-```
-
-This starts everything, but Keycloak comes up unconfigured, so the backend
-will crash-loop until you finish a short one-time setup — see
-[Running with Docker](#running-with-docker).
-
-**Prefer running the app natively?** Keep Postgres + Keycloak in Docker and
-run the backend yourself for faster reload:
-
-```bash
-cd backend
-cp .env.example .env      # fill in the values — see Environment variables
-npm install
-npm run migration:run
-npm run start:dev
-```
-
-App: `http://localhost:4007` · Swagger UI: `/api-docs`
-
-## Core concepts
-
-| Entity | What it is |
+| Dependency | Needed for |
 |---|---|
-| **Company** | Tenant root. Gets a `company_ifric_id` minted by ICID. |
-| **Factory** | Physical location, tagged to an owner company. |
-| **Product tag** | An external product/asset id linked to a company — the product data itself lives elsewhere, this service only stores the tag. |
-| **Digital twin** | Links a product/asset to a manufacturer company + an owner company, optionally a factory. Manufacturer/owner are just *roles* — any company can play either. |
-| **Access group** | Per-company CRUD-permission role. |
-| **Certificate** | ICID-issued/verified, Hedera-backed. |
+| **Docker + Docker Compose v2** | [Local Development](#local-development)'s Docker path — brings up PostgreSQL + Keycloak (+ ICID, in the full profile) for you |
+| **Node.js 20+ and npm** | Running the backend natively instead of via Docker, and any `npm run ...` script (migrations, tests, OpenAPI generation) |
+| **A Kubernetes cluster, `kubectl`, and Helm 3** | [Kubernetes Deployment](#kubernetes-deployment) only |
+| **A container registry** (Docker Hub, GHCR, ECR, ...) | Kubernetes Deployment only — the Helm chart doesn't build images; you build and push `backend/Dockerfile` yourself first |
+| **A running Keycloak instance** | Always — either the bundled one (Docker/Helm) or your own external one. No local-auth fallback exists |
+| **A running ICID-compatible instance** | Only if you use company creation or certificates — either the bundled one (`docker-compose.full.yaml` / `values-full.yaml`) or an external one. See [ICID Dependency](#icid-dependency) |
+| **PostgreSQL 16** | Always — bundled by both the Docker and Helm paths; only relevant to source yourself if you point at an external instance |
 
-## Usage flow
+None of the above is provisioned by this repo itself except via the
+explicitly-bundled Docker/Helm paths — read [Local Development](#local-development)
+or [Kubernetes Deployment](#kubernetes-deployment) before running anything.
+
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [API Overview](#api-overview)
+- [Keycloak Authentication](#keycloak-authentication)
+- [Usage Flow](#usage-flow)
+- [ICID Dependency](#icid-dependency)
+- [Kubernetes Deployment](#kubernetes-deployment)
+- [Local Development](#local-development)
+- [Notes / Troubleshooting](#notes--troubleshooting)
+
+## API Overview
+
+| Controller | Routes | Endpoints | Owns |
+|---|---|---|---|
+| Auth | `/auth/*` | 23 | Login, sessions, credential/user-lifecycle management — no company/product data of its own |
+| Company | `/company/*` | 40 | Company CRUD, access groups (RBAC roles), physical assets, factories |
+| Product | `/product/*` | 20 | External product tagging, digital twins |
+| Certificate | `/certificate/*` | 5 | ICID-backed certificate issuance/verification — only registered when `HEDERA_KEY_SECRET` is set |
+| Script | `/script*` | 2 | One-time seed data for a fresh deployment (see [Usage Flow](#usage-flow)) |
+
+Full per-endpoint reference, including which routes are public vs.
+Keycloak-guarded vs. additionally company/RBAC-scoped:
+[`docs/api-reference.md`](docs/api-reference.md).
+
+That table is hand-maintained; the app itself is the authoritative source:
+
+- **Live, interactive:** Swagger UI at `/api-docs` once the app is running.
+- **Static specs**, generated from the running app: `backend/openapi.yaml`
+  (full surface), `backend/openapi.company.yaml` (`/company/*` only).
+  Regenerate with `npm run generate:openapi` (from `backend/`, app must
+  already be running) after changing any controller.
+
+## Keycloak Authentication
+
+Keycloak issues, refreshes, and verifies every token, and owns all
+credential/user-lifecycle state — this app never hashes a password or
+signs a JWT itself. Two Keycloak clients are involved:
+
+- **`ifric`** — a confidential client with Direct Access Grants enabled.
+  End users authenticate against it (`POST /auth/login`, a Resource Owner
+  Password Credentials grant), and every `CompanyUser`'s token carries
+  `company_ifric_id`/`user_id` claims (via a realm protocol mapper) that
+  company-scoped endpoints check against the request.
+- **`ifric-admin`** — a confidential, service-account-enabled client used
+  only for Keycloak's Admin API (create/reset-password/delete users) —
+  kept separate so a leaked end-user-facing client secret can't also
+  manage the realm's users.
+
+Both clients, plus two protocol mappers on `ifric`, must already exist in
+the target realm — this is a one-time manual step (the app fails fast at
+boot without them). Full walkthrough, for both local Docker and
+Kubernetes: [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
+
+**Getting and using a token:**
+
+```bash
+curl -X POST http://localhost:4007/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@acme.example",
+    "password": "your-password",
+    "product_name": "IFRIC Dashboard"
+  }'
+# → { "status": 200, "data": { "access_token": "...", "refresh_token": "...", ... } }
+
+curl http://localhost:4007/company/get-company-details/<company_ifric_id> \
+  -H "Authorization: Bearer <access_token>"
+```
+
+Tokens are short-lived; exchange the `refresh_token` for a new pair via
+`POST /auth/refresh` rather than logging in again each time.
+
+## Usage Flow
 
 A manufacturer tags a product; an owner company gets tagged as where that
 product physically lives. The two are always separate companies.
@@ -102,29 +113,34 @@ product physically lives. The two are always separate companies.
 | Step | Call | What happens |
 |---|---|---|
 | 1 | `POST /script` | Seed once: default access groups + category taxonomy |
-| 2 | `POST /company/create-company` ×2 | Create the manufacturer and the owner (ICID mints a `company_ifric_id` for each) |
+| 2 | `POST /company/create-company` ×2 | Create the manufacturer and the owner. ICID mints a `company_ifric_id` for each, and a default admin user (full RBAC, its own Keycloak account) is provisioned automatically for each company |
 | 3 | `POST /auth/login` | Log in as one company's admin user → `access_token` |
-| 4 | `POST /company/factories` | Tag a factory location to the owner |
-| 5 | `POST /product/company-product` | Tag an external product to the manufacturer |
-| 6 | `POST /product/twin` | Link manufacturer + owner + factory as one digital twin |
-| 7 | `GET /product/:id/owner`, `GET /product/:id/factory-location` | Read it back — owner ≠ manufacturer, factory resolved |
+| 4 | `POST /auth/create-user/:admin_mail` | (Optional) create an additional user for that company, with a specific access-group role per product |
+| 5 | `POST /company/factories` | Tag a factory location to the owner |
+| 6 | `POST /product/company-product` | Tag an external product to the manufacturer |
+| 7 | `POST /product/twin` | Link manufacturer + owner + factory as one digital twin |
+| 8 | `GET /product/:id/owner`, `GET /product/:id/factory-location` | Read it back — owner ≠ manufacturer, factory resolved |
+| 9 | `GET /company/factories/:id/products` | Read back the same link from the factory's side — every asset URN located there |
 
 ```mermaid
 sequenceDiagram
     actor You
     participant App as ifric-registry-service
     participant ICID
+    participant Keycloak
 
     You->>App: POST /script (seed once)
     You->>App: POST /company/create-company (manufacturer)
     App->>ICID: mint company_ifric_id
+    App->>Keycloak: provision default admin user
     You->>App: POST /company/create-company (owner)
     You->>App: POST /auth/login
     App-->>You: access_token
+    You->>App: POST /auth/create-user/:admin_mail (optional, additional user)
     You->>App: POST /company/factories (tag to owner)
     You->>App: POST /product/company-product (tag external product)
     You->>App: POST /product/twin (manufacturer + owner + factory)
-    You->>App: GET .../owner · .../factory-location
+    You->>App: GET .../owner · .../factory-location · .../factories/:id/products
     App-->>You: owner ≠ manufacturer, factory resolved ✓
 ```
 
@@ -133,131 +149,19 @@ sequenceDiagram
 `type: "asset" | "gateway" | "server"` field alongside the matching
 `*_ifric_id` field.
 
-## Authentication
-
-Keycloak is the sole identity provider — there's no local auth to fall
-back on.
-
-| Route | What happens |
-|---|---|
-| `POST /auth/login` | Same `{email, password, product_name}` body as always. Verified against Keycloak (`ifric` client), then resolves company/access-group data. Returns `access_token`/`refresh_token`. |
-| `POST /auth/refresh` | Exchanges a refresh token via Keycloak. Keycloak rotates refresh tokens, so the response includes a new one — use it next time. |
-| `POST /auth/logout` | Pass `refresh_token` to also revoke the session at Keycloak. |
-| `POST /auth/create-user`, `update-password`, `recover-password`, `delete-company-user` | Manage credentials via Keycloak's Admin API (`ifric-admin` client). |
-
-Every guarded route checks the bearer token against Keycloak's signing keys
-(JWKS, cached — no per-request round trip).
-
-**Setup required before login works:** two Keycloak clients — `ifric`
-(Direct Access Grants, for end-user tokens) and `ifric-admin` (service
-account with `manage-users`, for the Admin API) — must exist in the target
-realm. This is a one-time manual step; see
-[Running with Docker](#running-with-docker) or
-[Deploying with Helm](#deploying-with-helm).
-
-## Environment variables
-
-Full reference with comments: `backend/.env.example`.
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `DB_HOST`, `DB_NAME` | Yes | PostgreSQL host/database |
-| `DB_PORT`, `DB_USER`, `DB_PASSWORD` | No | Default `5432`/`ifric`/`ifric` |
-| `KEYCLOAK_URL`, `KEYCLOAK_REALM` | Yes | Keycloak instance + realm |
-| `KEYCLOAK_CLIENT_SECRET` | Yes | Secret for the `ifric` client |
-| `KEYCLOAK_ADMIN_CLIENT_SECRET` | Yes | Secret for the `ifric-admin` client |
-| `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN_CLIENT_ID` | No | Default `ifric`/`ifric-admin` |
-| `ICID_SERVICE_BACKEND_URL` | Yes* | Base URL of an ICID-compatible instance |
-| `COMPANY_DEFAULT_CODE` | Yes* | `IFX-COM-NAP` — see [ICID integration](#icid-integration) |
-| `HEDERA_KEY_SECRET` | No | Set to enable `/certificate/*` |
-| `PORT`, `CORS_ORIGIN` | No | HTTP port / allowed browser origins |
-
-<sub>* app fails fast at boot without a value; only needs to actually work if you use company creation.</sub>
-
-## Running with Docker
-
-| File | Starts |
-|---|---|
-| `docker-compose.yaml` | App + PostgreSQL + Keycloak, plus a one-shot `migrate` service |
-| `docker-compose.full.yaml` | Same, plus a real ICID (+ its own MongoDB), unmodified `ibn40/icid-backend:latest` |
-| `backend/Dockerfile` | Standalone image — bring your own PostgreSQL and Keycloak |
-
-Postgres/DB vars are already set for you; only Keycloak needs your input.
-Two passes:
-
-```bash
-docker compose up --build   # pass 1 — Postgres/Keycloak/migrate come up,
-                             # backend crash-loops until Keycloak is configured
-```
-
-With Keycloak up at `http://localhost:8080`:
-
-1. Log in to the admin console (`admin`/`admin` — dev-only).
-2. Create a realm (e.g. `ifric`).
-3. Create a **confidential** client `ifric` with **Direct Access Grants**
-   enabled. Copy its secret (Clients → `ifric` → Credentials).
-4. Create a second **confidential** client `ifric-admin` with its
-   **service account** enabled, granted the `realm-management` client's
-   `manage-users` role. Copy its secret.
-5. Put both secrets + the realm + `KEYCLOAK_URL=http://localhost:8080`
-   into `backend/.env`.
-
-```bash
-docker compose up --build   # pass 2 — backend now boots and can authenticate
-# — or, with a real ICID —
-docker compose -f docker-compose.full.yaml up --build
-curl -X POST http://localhost:4010/script   # seed ICID (once)
-curl -X POST http://localhost:4007/script   # seed this service (once)
-```
-
-`docker-compose.full.yaml` follows the same two-pass sequence; its Keycloak
-secrets come from a `.env` file next to that compose file, or your shell.
-
-<details>
-<summary>Standalone image, network troubleshooting</summary>
-
-```bash
-cd backend
-docker build -t ifric-registry-service .
-docker run -p 4007:4007 --env-file .env ifric-registry-service
-```
-
-Run migrations against it first (`npm run migration:run` from `backend/`)
-— the standalone image doesn't apply them automatically.
-
-`DB_HOST` must be reachable **from inside the container**:
-
-- Same Docker network → use the container/service name (e.g. `postgres`).
-- Docker Desktop reaching PostgreSQL on your host → `host.docker.internal`.
-- Remote/managed PostgreSQL → its real host.
-
-**If `docker build` hangs on `RUN npm install`**, your Docker daemon may
-block build-time network access (seen in some sandboxed/CI environments) —
-add `--network=host` to the build command.
-
-</details>
-
-## Deploying with Helm
-
-A chart at `charts/ifric-registry-service/` mirrors the two Compose files
-— default profile via `values.yaml` alone, full profile (+ bundled ICID)
-by layering `values-full.yaml` on top. Keycloak is bundled and enabled by
-default in both profiles.
-
-Same as Compose: `helm install` succeeds, but the backend Pod crash-loops
-until you complete the manual Keycloak setup above (against the release's
-own Keycloak Service) and `helm upgrade` with
-`secrets.keycloakClientSecret`/`secrets.keycloakAdminClientSecret` set.
-
-See [`charts/ifric-registry-service/README.md`](charts/ifric-registry-service/README.md)
-for install commands, secrets, and the full Keycloak walkthrough.
-
-## ICID integration
+## ICID Dependency
 
 [ICID](https://github.com/IndustryFusion/icidservice) is a separate
 open-source service that mints `company_ifric_id`s and issues/verifies
-Hedera-backed certificates. Not bundled here — point
-`ICID_SERVICE_BACKEND_URL` at a running instance.
+Hedera-backed certificates. It's not application code in this repo — it
+runs as its own service, in one of two ways:
+
+- **External** (default): point `ICID_SERVICE_BACKEND_URL` at an instance
+  you already run.
+- **Bundled**: `docker-compose.full.yaml` (local) or the Helm chart's
+  `values-full.yaml` overlay (Kubernetes) both run the unmodified,
+  published `ibn40/icid-backend:latest` image, alongside its own required
+  MongoDB.
 
 **Contract:** `POST /company` (mint), `DELETE /company/:id` (rollback on
 failure), `POST /certificate/create-company-certificate`,
@@ -268,30 +172,97 @@ Certificates are optional, controlled by `HEDERA_KEY_SECRET`: set it and
 `/certificate/*` is registered; leave it unset and those routes don't
 exist (`404`) — everything else works either way.
 
-## API documentation
+## Kubernetes Deployment
 
-- Live, interactive: `/api-docs` (Swagger UI) once the app is running.
-- Static specs in `backend/`: `openapi.yaml` (full surface),
-  `openapi.company.yaml` (`/company/*` only).
+A Helm chart at `charts/ifric-registry-service/` mirrors the two Compose
+profiles — default (external ICID) via `values.yaml` alone, full (+
+bundled ICID) by layering `values-full.yaml` on top. PostgreSQL and
+Keycloak are bundled and enabled by default in both.
 
-Both are generated from the running app, not hand-written — regenerate
-after changing any controller:
+**Required** (no safe default — the backend fails fast at boot without
+these, or crash-loops until they're set post-install):
+
+| Helm value | Purpose |
+|---|---|
+| `secrets.keycloakClientSecret`, `secrets.keycloakAdminClientSecret` | Keycloak client secrets — see [`docs/keycloak-setup.md`](docs/keycloak-setup.md) |
+| `env.icidServiceBackendUrl` | Only when `icid.enabled=false` (default profile) — ignored when ICID is bundled |
+| `env.companyDefaultCode` | Defaults to `IFX-COM-NAP` — only needs to actually match your ICID instance if you use company creation |
+| `secrets.companyCreationApiKey` | Auto-generated if left blank (reused across upgrades) — placeholder gate for `POST /company/create-company` |
+
+**Optional** (safe defaults):
+
+| Helm value | Default | Purpose |
+|---|---|---|
+| `secrets.hederaKeySecret` | unset | Set to enable `/certificate/*` |
+| `env.dbSsl`, `env.dbSslRejectUnauthorized`, `env.dbSslCa` | `false` / `true` / unset | TLS to an external Postgres — irrelevant to the bundled one (no TLS listener) |
+| `postgres.enabled`, `keycloak.enabled`, `icid.enabled` | `true` / `true` / `false` | Bundled vs. external per component — see the chart's own README for every combination |
+| `env.corsOrigin` | `http://localhost:3000` | Allowed browser origins |
+
+```bash
+helm install my-registry charts/ifric-registry-service \
+  --set image.repository=<your-registry>/ifric-registry-service \
+  --set image.tag=<tag>
+```
+
+This succeeds, but the backend Pod crash-loops until the manual Keycloak
+setup is done (see [`docs/keycloak-setup.md`](docs/keycloak-setup.md)) and
+you `helm upgrade` with the two client secrets set.
+
+Full install walkthrough, complete secrets reference, and every bundled-
+vs-external topology combination (Postgres/Keycloak/ICID/MongoDB, mixed
+and matched):
+[`charts/ifric-registry-service/README.md`](charts/ifric-registry-service/README.md).
+
+## Local Development
+
+The fastest path is Docker — it brings up Postgres + Keycloak for you:
+
+```bash
+docker compose up --build
+```
+
+This starts everything, but Keycloak comes up unconfigured, so the backend
+will crash-loop until you finish the one-time setup in
+[`docs/keycloak-setup.md`](docs/keycloak-setup.md).
+
+**Prefer running the app natively?** Keep Postgres + Keycloak in Docker and
+run the backend yourself for faster reload:
 
 ```bash
 cd backend
-npm run start:dev &
-npm run generate:openapi
+cp .env.example .env      # fill in the values, see the comments in that file
+npm install
+npm run migration:run
+npm run start:dev
 ```
 
-## Testing
+App: `http://localhost:4007` · Swagger UI: `/api-docs`.
 
-```bash
-cd backend
-npm test          # unit tests
-npm run test:e2e  # e2e tests (currently boilerplate)
-npm run lint
-npm run build
-```
+Standalone Docker image (bring your own Postgres/Keycloak), network
+troubleshooting, and migration notes:
+[`docs/local-development.md`](docs/local-development.md).
+
+## Notes / Troubleshooting
+
+- **Factory deletion is blocked (`409`)** while any digital twin still
+  references it — detach the twin (`PATCH /product/twin` with a different
+  `factory_id`, or delete it) first.
+- **`POST /company/company-asset`** needs a `type: "asset" | "gateway" |
+  "server"` field alongside the matching `*_ifric_id` field — it's one
+  endpoint for all three physical-resource kinds.
+- **`DB_SSL` is off by default** and doesn't affect the bundled Compose/Helm
+  Postgres (no TLS listener there regardless) — only relevant once you
+  point at a real external instance.
+- **Run the test suite / lint / build** (from `backend/`):
+  ```bash
+  npm test          # unit tests
+  npm run test:e2e  # e2e tests (currently boilerplate)
+  npm run lint
+  npm run build
+  ```
+- Backend crash-looping right after first boot is almost always the
+  Keycloak manual setup not being done yet — see
+  [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
 
 ## License
 

@@ -106,6 +106,13 @@ describe('envConstants.certificatesEnabled', () => {
     );
   });
 
+  it('requires COMPANY_CREATION_API_KEY', () => {
+    delete process.env.COMPANY_CREATION_API_KEY;
+    expect(() => require('./env.constants')).toThrow(
+      'COMPANY_CREATION_API_KEY environment variable is required',
+    );
+  });
+
   it('defaults keycloak.clientId/adminClientId to ifric/ifric-admin when unset', () => {
     delete process.env.KEYCLOAK_CLIENT_ID;
     delete process.env.KEYCLOAK_ADMIN_CLIENT_ID;
@@ -120,5 +127,30 @@ describe('envConstants.certificatesEnabled', () => {
     const { envConstants } = require('./env.constants');
     expect(envConstants.keycloak.clientId).toBe('custom-client');
     expect(envConstants.keycloak.adminClientId).toBe('custom-admin-client');
+  });
+
+  it('defaults dbSsl to false when DB_SSL is unset', () => {
+    delete process.env.DB_SSL;
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.dbSsl).toBe(false);
+  });
+
+  it('builds a ssl option when DB_SSL=true', () => {
+    process.env.DB_SSL = 'true';
+    delete process.env.DB_SSL_REJECT_UNAUTHORIZED;
+    delete process.env.DB_SSL_CA;
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.dbSsl).toEqual({ rejectUnauthorized: true });
+  });
+
+  it('honors DB_SSL_REJECT_UNAUTHORIZED=false and DB_SSL_CA', () => {
+    process.env.DB_SSL = 'true';
+    process.env.DB_SSL_REJECT_UNAUTHORIZED = 'false';
+    process.env.DB_SSL_CA = '-----BEGIN CERTIFICATE-----...';
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.dbSsl).toEqual({
+      rejectUnauthorized: false,
+      ca: '-----BEGIN CERTIFICATE-----...',
+    });
   });
 });

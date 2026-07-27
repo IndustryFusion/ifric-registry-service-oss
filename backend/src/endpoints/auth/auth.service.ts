@@ -34,6 +34,8 @@ import {
   CompanyTwin,
 } from 'src/entities';
 import { KeycloakService } from './keycloak.service';
+import { AccessControlService } from 'src/common/access-control.service';
+import { AuthTokenClaims } from './auth-token-claims.interface';
 import * as generator from 'generate-password';
 import * as dotenv from 'dotenv';
 import { HttpException, HttpStatus } from '@nestjs/common';
@@ -65,10 +67,21 @@ export class AuthService {
     @InjectRepository(CompanyTwin)
     private companyTwinRepository: Repository<CompanyTwin>,
     private keycloakService: KeycloakService,
+    private readonly accessControlService: AccessControlService,
   ) {}
 
-  async createCompanyUser(data: UserAccessDto, adminMail: string) {
+  async createCompanyUser(
+    data: UserAccessDto,
+    adminMail: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        data.company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'create');
+
       // Fetch User From Company User
       const companyUserResponse = await this.companyUserRepository.find({
         where: { user_email: data.user_email },
@@ -81,6 +94,12 @@ export class AuthService {
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: data.company_ifric_id },
       });
+      if (companyData.length === 0) {
+        throw new HttpException(
+          'No company found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
+      }
       const companyId = companyData[0]._id;
 
       // Add Temporary Password
@@ -92,23 +111,35 @@ export class AuthService {
         excludeSimilarCharacters: true,
       });
 
+      // Pre-generated so it can be stamped onto the Keycloak identity below
+      // before the CompanyUser row exists — see CompanyService.createCompany
+      // for the same pattern.
+      const newUserId = generateId();
+
       // Provision the identity in Keycloak — credentials live there, not
-      // in this table.
+      // in this table. company_ifric_id/user_id become Keycloak user
+      // attributes, projected into access tokens via a realm protocol
+      // mapper (see README.md).
       await this.keycloakService.createUser(
         data.user_email,
         data.user_name,
         temporaryPassword,
+        { company_ifric_id: data.company_ifric_id, user_id: newUserId },
       );
 
       const response = await this.companyUserRepository.save(
         this.companyUserRepository.create({
+          _id: newUserId,
           company_id: companyId,
           user_email: data.user_email,
           user_name: data.user_name,
           meta_data: {
             created_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
             updated_at: moment().utc().format('YYYY-MM-DDTHH:mm:ss.SSS[Z]'),
-            add_by: adminMail,
+            // Sourced from the verified caller's own token now, not the
+            // unverified :admin_mail path param — adminMail is kept only
+            // for the route shape, not trusted for anything.
+            add_by: authUser.email ?? authUser.preferred_username ?? adminMail,
           },
         }),
       );

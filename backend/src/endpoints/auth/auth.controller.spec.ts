@@ -30,6 +30,7 @@ import {
   CompanyProduct,
   CompanyTwin,
 } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -49,6 +50,7 @@ describe('AuthController', () => {
         { provide: getRepositoryToken(CompanyProduct), useValue: {} },
         { provide: getRepositoryToken(CompanyTwin), useValue: {} },
         { provide: KeycloakService, useValue: {} },
+        { provide: AccessControlService, useValue: {} },
       ],
     }).compile();
 
