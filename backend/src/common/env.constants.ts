@@ -65,12 +65,13 @@ if (!process.env.COMPANY_CREATION_API_KEY) {
 // presence is what turns certificates on: see CertificateModule and
 // CompanyService.getAllCompanies.
 //
-// DB_SSL is also optional and off by default — unset (or any value other
-// than "true") preserves today's plaintext connection exactly. When on,
-// DB_SSL_REJECT_UNAUTHORIZED defaults to true (verify the server cert);
-// DB_SSL_CA is an optional PEM string for a self-signed/private-CA
-// Postgres instance. See database/pg-ssl.util.ts for the shape this
-// becomes on the wire.
+// DB_SSL is optional but on by default — unset (or anything other than
+// "false") turns on TLS to Postgres; set DB_SSL=false to opt back out
+// (required for the bundled Compose/Helm Postgres, which has no TLS
+// listener at all). DB_SSL_REJECT_UNAUTHORIZED defaults to true (verify
+// the server cert); DB_SSL_CA is an optional PEM string for a
+// self-signed/private-CA Postgres instance. See database/pg-ssl.util.ts
+// for the shape this becomes on the wire.
 export const envConstants = {
   icidServiceBackendUrl: process.env.ICID_SERVICE_BACKEND_URL,
   hederaKeySecret: process.env.HEDERA_KEY_SECRET,
@@ -83,7 +84,7 @@ export const envConstants = {
   dbPassword: process.env.DB_PASSWORD || 'ifric',
   dbName: process.env.DB_NAME,
   dbSsl: buildPgSslOption({
-    enabled: process.env.DB_SSL === 'true',
+    enabled: process.env.DB_SSL !== 'false',
     rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
     ca: process.env.DB_SSL_CA || undefined,
   }),

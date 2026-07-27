@@ -30,10 +30,11 @@ from your host shell:
 - Same Docker network as your Postgres container → use the container/service
   name (e.g. `postgres`).
 - Docker Desktop, Postgres running on your host → `host.docker.internal`.
-- Remote/managed PostgreSQL → its real hostname.
-- Remote/managed PostgreSQL requiring TLS → set `DB_SSL=true` (and
-  `DB_SSL_CA` if it uses a private/self-signed CA) — see
-  `backend/.env.example`.
+- Remote/managed PostgreSQL → its real hostname. `DB_SSL` defaults to on,
+  so TLS is used automatically (set `DB_SSL_CA` if it uses a
+  private/self-signed CA) — see `backend/.env.example`.
+- Postgres with no TLS listener (including the bundled docker-compose/Helm
+  one) → set `DB_SSL=false`.
 
 ## Troubleshooting
 

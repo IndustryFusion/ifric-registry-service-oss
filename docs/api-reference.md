@@ -17,8 +17,8 @@ hand-maintained — if it and the running app ever disagree, the app wins:
 noted otherwise. "RBAC-scoped" means the endpoint additionally checks the
 token's own `company_ifric_id`/`user_id` against the request (see the root
 README's [Keycloak Authentication](../README.md#keycloak-authentication)
-section and `AccessControlService`) — company/user CRUD, factory CRUD, and
-all of `/company/assets/*` are RBAC-scoped; directory/search-style reads
+section and `AccessControlService`). Company/user CRUD, factory CRUD, and
+all of `/company/assets/*` are RBAC-scoped. Directory/search-style reads
 that intentionally span companies (`get-all-companies`, manufacturer
 search, category listings) are not.
 
@@ -76,11 +76,14 @@ Merges what used to be two unrelated concepts — a bare physical-asset tag
 and a manufacturer/owner/factory "digital twin" — into **one** object. A
 row starts physical-only (`company_ifric_id` only, `is_twin: false`) and
 becomes a twin once `owner_company_ifric_id` (+ optionally `factory_id`) is
-set. All RBAC-scoped: writes and single-object reads (`:id`,
-`:id/manufacturer`, `:id/owner`, `:id/factory-location`) check the caller
-against whichever party (manufacturer or owner) the asset belongs to;
-`assets`/`assets/manufacturer/:id`/`assets/owner/:id`/
-`assets/count/:id` check the caller against the named `company_ifric_id`.
+set.
+
+All routes are RBAC-scoped, but the check differs by shape: writes and
+single-object reads (`:id`, `:id/manufacturer`, `:id/owner`,
+`:id/factory-location`) check the caller against whichever party
+(manufacturer or owner) the asset belongs to. `assets`,
+`assets/manufacturer/:id`, `assets/owner/:id`, and `assets/count/:id`
+instead check the caller against the named `company_ifric_id`.
 
 | Method | Path | Description |
 |---|---|---|
@@ -103,7 +106,7 @@ against whichever party (manufacturer or owner) the asset belongs to;
 
 | Method | Path | Guard | Description |
 |---|---|---|---|
-| POST | `/company/company-asset` | Auth + RBAC-scoped | Create a gateway/server (`type` discriminator — `"asset"` moved to `POST /company/assets`). |
+| POST | `/company/devices` | Auth + RBAC-scoped | Create a gateway/server (`type` discriminator — `"asset"` moved to `POST /company/assets`). |
 | POST | `/company/create-access-group/:id` | Auth | Create a custom RBAC role for a company. |
 | POST | `/company/create-company` | `X-API-Key` (`COMPANY_CREATION_API_KEY`), not a Keycloak token | Create a company: mints `company_ifric_id` via ICID, provisions a default admin user + RBAC roles, all in one transaction. |
 | POST | `/company/add-status-detail` | Public | Mark a company's verification status. |

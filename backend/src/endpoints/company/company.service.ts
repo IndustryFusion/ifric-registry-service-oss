@@ -38,7 +38,7 @@ import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 import { CertificateService } from '../certificate/certificate.service';
 import { KeycloakService } from '../auth/keycloak.service';
 import { RegisterAuthDto, AddStatusDto } from '../auth/dto/register-auth.dto';
-import { CompanyAssetDto } from '../auth/dto/company-asset.dto';
+import { CompanyDeviceDto } from '../auth/dto/company-device.dto';
 import { AccessGroupDto } from '../auth/dto/access-group.dto';
 import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
@@ -523,7 +523,7 @@ export class CompanyService {
 
   // "asset" was dropped from this discriminator — POST /company/assets
   // supersedes it (see AssetService). Only gateway/server remain here.
-  async createCompanyAsset(data: CompanyAssetDto, authUser: AuthTokenClaims) {
+  async createCompanyDevice(data: CompanyDeviceDto, authUser: AuthTokenClaims) {
     try {
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: data.company_ifric_id },

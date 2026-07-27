@@ -124,6 +124,10 @@ services:
       - DB_USER=ifric
       - DB_PASSWORD=ifric
       - DB_NAME=ifric_registry_service
+      # DB_SSL now defaults to on (see backend/.env.example) — explicitly
+      # disabled here since the bundled postgres service above has no TLS
+      # listener.
+      - DB_SSL=false
     restart: "no"
     depends_on:
       postgres:
@@ -173,7 +177,9 @@ services:
     ports:
       - "4007:4007"
     environment:
-      # DB_SSL intentionally unset — bundled postgres has no TLS listener.
+      # DB_SSL now defaults to on (see backend/.env.example) — explicitly
+      # disabled since the bundled postgres above has no TLS listener.
+      - DB_SSL=false
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=ifric

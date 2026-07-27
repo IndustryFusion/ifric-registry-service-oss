@@ -541,7 +541,7 @@ describe('CompanyService', () => {
     });
   });
 
-  describe('createCompanyAsset', () => {
+  describe('createCompanyDevice', () => {
     beforeEach(() => {
       companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
     });
@@ -550,7 +550,7 @@ describe('CompanyService', () => {
       companyRepository.find.mockResolvedValue([]);
 
       await expect(
-        service.createCompanyAsset(
+        service.createCompanyDevice(
           {
             type: 'gateway',
             company_ifric_id: 'urn:ifric:missing',
@@ -563,7 +563,7 @@ describe('CompanyService', () => {
 
     it('throws 400 when type is "gateway" but gateway_ifric_id is missing', async () => {
       await expect(
-        service.createCompanyAsset(
+        service.createCompanyDevice(
           {
             type: 'gateway',
             company_ifric_id: 'urn:ifric:company-1',
@@ -575,7 +575,7 @@ describe('CompanyService', () => {
 
     it('throws 400 when type is "server" but server_ifric_id is missing', async () => {
       await expect(
-        service.createCompanyAsset(
+        service.createCompanyDevice(
           {
             type: 'server',
             company_ifric_id: 'urn:ifric:company-1',
@@ -587,7 +587,7 @@ describe('CompanyService', () => {
 
     it('throws 400 for an unknown/missing type instead of silently creating a server', async () => {
       await expect(
-        service.createCompanyAsset(
+        service.createCompanyDevice(
           {
             type: undefined as any,
             company_ifric_id: 'urn:ifric:company-1',
@@ -601,7 +601,7 @@ describe('CompanyService', () => {
     it('creates a gateway when type is "gateway", after checking company-scoped RBAC', async () => {
       companyGateWayRepository.save.mockResolvedValue({});
 
-      await service.createCompanyAsset(
+      await service.createCompanyDevice(
         {
           type: 'gateway',
           company_ifric_id: 'urn:ifric:company-1',

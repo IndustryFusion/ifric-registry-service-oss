@@ -44,11 +44,11 @@ env:
     realm: ""
     clientId: "ifric"
     adminClientId: "ifric-admin"
-  # Optional — enables TLS on this app's connection to Postgres. Off by
-  # default; does not affect the bundled postgres.enabled=true StatefulSet
-  # (no TLS listener regardless) — only matters when pointed at a real
-  # external instance via postgres.external.host, which typically requires
-  # TLS. See backend/.env.example.
+  # Enables TLS on this app's connection to Postgres. The backend itself
+  # defaults DB_SSL to on, but this chart explicitly sets it false here
+  # since the bundled postgres.enabled=true StatefulSet has no TLS
+  # listener — flip to true only once pointed at a real external instance
+  # via postgres.external.host that requires TLS. See backend/.env.example.
   dbSsl: false
   dbSslRejectUnauthorized: true
   # PEM contents of a custom/private CA cert, for a self-signed or

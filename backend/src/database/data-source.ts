@@ -41,7 +41,7 @@ export const dataSourceOptions: DataSourceOptions = {
   password: process.env.DB_PASSWORD || 'ifric',
   database: process.env.DB_NAME || 'ifric_registry_service',
   ssl: buildPgSslOption({
-    enabled: process.env.DB_SSL === 'true',
+    enabled: process.env.DB_SSL !== 'false',
     rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
     ca: process.env.DB_SSL_CA || undefined,
   }),

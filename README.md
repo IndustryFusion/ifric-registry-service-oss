@@ -55,7 +55,7 @@ or [Kubernetes Deployment](#kubernetes-deployment) before running anything.
 
 **Assets** (`/company/assets/*`) merge what used to be two separate ideas —
 a bare physical-asset tag and a manufacturer/owner/factory "digital twin"
-— into one object: a row starts physical-only and becomes a twin once
+— into one object. A row starts physical-only; it becomes a twin once
 `owner_company_ifric_id` (+ optionally `factory_id`) is set on it. See
 [`docs/api-reference.md`](docs/api-reference.md) for the full route list.
 
@@ -78,10 +78,10 @@ credential/user-lifecycle state — this app never hashes a password or
 signs a JWT itself. Two Keycloak clients are involved:
 
 - **`ifric`** — a confidential client with Direct Access Grants enabled.
-  End users authenticate against it (`POST /auth/login`, a Resource Owner
-  Password Credentials grant), and every `CompanyUser`'s token carries
-  `company_ifric_id`/`user_id` claims (via a realm protocol mapper) that
-  company-scoped endpoints check against the request.
+  End users authenticate against it: `POST /auth/login`, a Resource Owner
+  Password Credentials grant. Every `CompanyUser`'s token carries
+  `company_ifric_id`/`user_id` claims (via a realm protocol mapper), and
+  company-scoped endpoints check those claims against the request.
 - **`ifric-admin`** — a confidential, service-account-enabled client used
   only for Keycloak's Admin API (create/reset-password/delete users) —
   kept separate so a leaked end-user-facing client secret can't also
@@ -93,7 +93,7 @@ boot without them). Full walkthrough, for both local Docker and
 Kubernetes: [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
 
 **Getting and using a token:** RBAC in this app is **one `AccessGroup` role
-per user per company** — no per-product dimension — so login just needs
+per user per company** — no per-product dimension. Login just needs
 credentials; the response's `access_group` field is that one role.
 
 ```bash
@@ -115,8 +115,8 @@ Tokens are short-lived; exchange the `refresh_token` for a new pair via
 ## Usage Flow
 
 A manufacturer creates an asset; an owner company gets tagged onto that
-same asset as where it physically lives (which is what "twins" it). The
-two are always separate companies.
+same asset as the location where it physically lives — that's what "twins"
+it. The two are always separate companies.
 
 | Step | Call | What happens |
 |---|---|---|
@@ -152,8 +152,8 @@ sequenceDiagram
 
 **Good to know:** deleting a factory still referenced by an asset is
 blocked (`409`) — detach it first (`PATCH /company/assets/:id` with a
-different/no `factory_id`, or delete the asset). `POST /company/company-asset`
-is only for gateways/servers now (`type: "gateway" | "server"`) — assets
+different/no `factory_id`, or delete the asset). `POST /company/devices`
+is for gateways/servers (`type: "gateway" | "server"`) — assets
 go through `POST /company/assets` instead.
 
 ## ICID Dependency
@@ -185,10 +185,11 @@ A Helm chart at `charts/ifric-registry-service/` mirrors the two Compose
 profiles — `values.yaml` alone (default, external ICID), or layer
 `values-full.yaml` on top (bundled ICID). Every backing service —
 PostgreSQL, Keycloak, ICID — can independently be **bundled** (the chart
-deploys it for you) or **external** (you bring your own); each
-subsection below follows the same shape so you can tell at a glance which
-way it's set up and how to flip it: which way it defaults, the one flag
-that switches it, and the exact value(s) to set for the other way.
+deploys it for you) or **external** (you bring your own). Each subsection
+below follows the same shape: which way it defaults, the one flag that
+switches it, and the exact value(s) to set for the other way — so you can
+tell at a glance how any one of them is currently configured and how to
+flip it.
 
 ### Database (PostgreSQL)
 
@@ -205,7 +206,7 @@ already have a database + user matching the values below.
 | `postgres.auth.user` | `ifric` | `DB_USER` | |
 | `postgres.auth.password` | `ifric` | `DB_PASSWORD` | Also becomes the bundled Postgres's own password; for an external instance, must match what it already expects |
 | `postgres.external.host`, `postgres.external.port` | unset, `5432` | `DB_HOST`, `DB_PORT` | Only read when `postgres.enabled=false` — ignored otherwise, the chart resolves the in-cluster Service address itself |
-| `env.dbSsl`, `env.dbSslRejectUnauthorized`, `env.dbSslCa` | `false`, `true`, unset | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | **Lives under `env.*`, not `postgres.*`**, despite being Postgres-specific — a known naming quirk in the chart, flagged here so you don't go looking for it under `postgres:`. Only matters against an external instance that requires TLS; the bundled Postgres has no TLS listener regardless |
+| `env.dbSsl`, `env.dbSslRejectUnauthorized`, `env.dbSslCa` | `false`, `true`, unset | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | **Lives under `env.*`, not `postgres.*`** — a known chart naming quirk, despite being Postgres-specific. The backend itself defaults `DB_SSL` on; the chart explicitly sets it `false` here since the bundled Postgres has no TLS listener — flip to `true` only once pointed at a real external instance that requires TLS |
 
 ### Keycloak
 
@@ -288,12 +289,12 @@ troubleshooting, and migration notes:
 
 - **Factory deletion is blocked (`409`)** while any asset still references
   it — detach it first (`PATCH /company/assets/:id`, or delete it).
-- **`POST /company/company-asset`** is for gateways/servers only
+- **`POST /company/devices`** is for gateways/servers only
   (`type: "gateway" | "server"`) — use `POST /company/assets` to create an
   asset.
-- **`DB_SSL` is off by default** and doesn't affect the bundled Compose/Helm
-  Postgres (no TLS listener there regardless) — only relevant once you
-  point at a real external instance.
+- **`DB_SSL` is on by default** — set `DB_SSL=false` if your Postgres has
+  no TLS listener, as with the bundled Compose/Helm Postgres (both already
+  set it explicitly for you).
 - **Run the test suite / lint / build** (from `backend/`):
   ```bash
   npm test          # unit tests

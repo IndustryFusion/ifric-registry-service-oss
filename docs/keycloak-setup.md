@@ -30,10 +30,11 @@ You need to create, in the target realm:
 
    Every `CompanyUser` gets these two attributes stamped onto its Keycloak
    account the moment it's created (`CompanyService.createCompany`,
-   `AuthService.createCompanyUser`, via the Admin API) — the mappers just
-   project them into the access token as real claims, so company-scoped
-   endpoints can check the token's own `company_ifric_id`/`user_id` against
-   the request instead of trusting whatever id the caller puts in the body.
+   `AuthService.createCompanyUser`, via the Admin API). The mappers then
+   project them into the access token as real claims. That lets
+   company-scoped endpoints check the token's own
+   `company_ifric_id`/`user_id` against the request, instead of trusting
+   whatever id the caller puts in the body.
 
 Both clients (and the two mappers) must already exist — this app never
 provisions them itself; `env.constants.ts` fails fast at boot if the client
@@ -144,8 +145,7 @@ A few things worth noting from this picture:
   this user do) and never sees a password. The only bridge between them is
   the pair of claims stamped at provisioning time and replayed at every
   login.
-- **A token is a claim of identity, not a live permission check** — the
-  actual `create`/`read`/`update`/`delete` decision is always re-derived
+- **The `create`/`read`/`update`/`delete` decision is always re-derived**
   from `UserAccessGroup`/`AccessGroup` at request time
   (`AccessControlService`), never cached in the token itself. Changing a
   user's role takes effect on their *next* request, no token

@@ -75,11 +75,14 @@ Copy `backend/.env.example` to `backend/.env`. `DB_HOST`, `DB_NAME`,
 `KEYCLOAK_CLIENT_ID`/`KEYCLOAK_ADMIN_CLIENT_ID` default to
 `ifric`/`ifric-admin`. `HEDERA_KEY_SECRET` is fully optional: it's
 certificate-only, and its presence is what turns the certificate feature on
-— see the `CertificateModule` bullet below. `DB_SSL`/
-`DB_SSL_REJECT_UNAUTHORIZED`/`DB_SSL_CA` are also fully optional and off by
-default, controlling only whether the `pg` connection to Postgres uses TLS
-(client-side only — the bundled docker-compose/Helm Postgres has no TLS
-listener); see `backend/src/database/pg-ssl.util.ts`. Without a reachable
+— see the `CertificateModule` bullet below. `DB_SSL` is optional and on by
+default (set it to `false` to opt out); `DB_SSL_REJECT_UNAUTHORIZED`/
+`DB_SSL_CA` are also optional, controlling only whether/how the `pg`
+connection to Postgres uses TLS (client-side only). The bundled
+docker-compose/Helm Postgres has no TLS listener, so both
+`docker-compose.yaml`/`docker-compose.full.yaml` and the Helm chart's
+`values.yaml` explicitly set `DB_SSL=false` for it; see
+`backend/src/database/pg-ssl.util.ts`. Without a reachable
 ICID, company creation fails at call time (not at boot); without a reachable
 Keycloak, nothing auth-related works at all (there is no local fallback).
 

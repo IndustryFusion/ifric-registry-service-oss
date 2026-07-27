@@ -15,7 +15,8 @@
 //
 
 // "asset" was dropped — POST /company/assets (AssetService) supersedes it.
-export interface CompanyAssetDto {
+// This DTO now only covers POST /company/devices (gateway/server).
+export interface CompanyDeviceDto {
   type: 'gateway' | 'server';
   company_ifric_id: string;
   gateway_ifric_id?: string;

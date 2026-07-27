@@ -149,7 +149,7 @@ curl http://localhost:4007/api-docs
 |---|---|---|
 | `replicaCount` | `1` | Backend replica count |
 | `postgres.enabled` | `true` | Set `false` + `postgres.external.host`/`.port` for an external instance |
-| `env.dbSsl` | `false` | Set `true` to connect to Postgres over TLS — see `values.yaml` for `dbSslRejectUnauthorized`/`dbSslCa` |
+| `env.dbSsl` | `false` | Backend defaults `DB_SSL` on; chart sets it `false` since the bundled Postgres has no TLS listener — set `true` once pointed at an external instance that requires TLS. See `values.yaml` for `dbSslRejectUnauthorized`/`dbSslCa` |
 | `postgres.persistence.enabled` | `true` | Set `false` for ephemeral storage — testing only; ignored when `postgres.enabled=false` |
 | `keycloak.enabled` | `true` | Set `false` + `env.keycloak.url`/`.realm` for an external instance |
 | `icid.enabled` | `false` | Set via `values-full.yaml`; `false` needs `env.icidServiceBackendUrl` pointed at an external instance |

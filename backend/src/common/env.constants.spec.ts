@@ -129,22 +129,22 @@ describe('envConstants.certificatesEnabled', () => {
     expect(envConstants.keycloak.adminClientId).toBe('custom-admin-client');
   });
 
-  it('defaults dbSsl to false when DB_SSL is unset', () => {
+  it('defaults dbSsl to enabled when DB_SSL is unset', () => {
     delete process.env.DB_SSL;
-    const { envConstants } = require('./env.constants');
-    expect(envConstants.dbSsl).toBe(false);
-  });
-
-  it('builds a ssl option when DB_SSL=true', () => {
-    process.env.DB_SSL = 'true';
     delete process.env.DB_SSL_REJECT_UNAUTHORIZED;
     delete process.env.DB_SSL_CA;
     const { envConstants } = require('./env.constants');
     expect(envConstants.dbSsl).toEqual({ rejectUnauthorized: true });
   });
 
+  it('disables dbSsl when DB_SSL=false', () => {
+    process.env.DB_SSL = 'false';
+    const { envConstants } = require('./env.constants');
+    expect(envConstants.dbSsl).toBe(false);
+  });
+
   it('honors DB_SSL_REJECT_UNAUTHORIZED=false and DB_SSL_CA', () => {
-    process.env.DB_SSL = 'true';
+    delete process.env.DB_SSL;
     process.env.DB_SSL_REJECT_UNAUTHORIZED = 'false';
     process.env.DB_SSL_CA = '-----BEGIN CERTIFICATE-----...';
     const { envConstants } = require('./env.constants');

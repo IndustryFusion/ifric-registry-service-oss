@@ -41,7 +41,7 @@ import { CompanyCreationApiKeyGuard } from './company-creation-key.guard';
 import { AuthUser } from '../auth/auth-user.decorator';
 import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 import { RegisterAuthDto, AddStatusDto } from '../auth/dto/register-auth.dto';
-import { CompanyAssetDto } from '../auth/dto/company-asset.dto';
+import { CompanyDeviceDto } from '../auth/dto/company-device.dto';
 import { AccessGroupDto } from '../auth/dto/access-group.dto';
 import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
@@ -415,7 +415,7 @@ export class CompanyController {
   // ===========================================================================
 
   @UseGuards(AuthGuard)
-  @Post('company-asset')
+  @Post('devices')
   @ApiBody({
     description: 'Details for creating a company gateway/server',
     required: true,
@@ -445,11 +445,11 @@ export class CompanyController {
       },
     },
   })
-  createCompanyAsset(
-    @Body() data: CompanyAssetDto,
+  createCompanyDevice(
+    @Body() data: CompanyDeviceDto,
     @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.companyService.createCompanyAsset(data, authUser);
+    return this.companyService.createCompanyDevice(data, authUser);
   }
 
   @UseGuards(AuthGuard)

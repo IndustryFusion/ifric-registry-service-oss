@@ -170,10 +170,10 @@ describe('CompanyController', () => {
     });
   });
 
-  describe('createCompanyAsset', () => {
-    it('delegates to CompanyService.createCompanyAsset with the gateway/server type discriminator', async () => {
+  describe('createCompanyDevice', () => {
+    it('delegates to CompanyService.createCompanyDevice with the gateway/server type discriminator', async () => {
       const companyService = {
-        createCompanyAsset: jest.fn().mockResolvedValue({ success: true }),
+        createCompanyDevice: jest.fn().mockResolvedValue({ success: true }),
       };
       (controller as any).companyService = companyService;
       const data = {
@@ -186,9 +186,12 @@ describe('CompanyController', () => {
         user_id: 'u1',
       };
 
-      const result = await controller.createCompanyAsset(data as any, authUser);
+      const result = await controller.createCompanyDevice(
+        data as any,
+        authUser,
+      );
 
-      expect(companyService.createCompanyAsset).toHaveBeenCalledWith(
+      expect(companyService.createCompanyDevice).toHaveBeenCalledWith(
         data,
         authUser,
       );
