@@ -182,42 +182,63 @@ exist (`404`) — everything else works either way.
 ## Kubernetes Deployment
 
 A Helm chart at `charts/ifric-registry-service/` mirrors the two Compose
-profiles — default (external ICID) via `values.yaml` alone, full (+
-bundled ICID) by layering `values-full.yaml` on top. PostgreSQL and
-Keycloak are bundled and enabled by default in both.
+profiles — `values.yaml` alone (default, external ICID), or layer
+`values-full.yaml` on top (bundled ICID). Every backing service —
+PostgreSQL, Keycloak, ICID — can independently be **bundled** (the chart
+deploys it for you) or **external** (you bring your own); each
+subsection below follows the same shape so you can tell at a glance which
+way it's set up and how to flip it: which way it defaults, the one flag
+that switches it, and the exact value(s) to set for the other way.
 
-**Required** (no safe default — the backend fails fast at boot without
-these, or crash-loops until they're set post-install):
+### Database (PostgreSQL)
+
+**Bundled by default** (`postgres.enabled=true`) — the chart deploys
+`postgres:16` as a `StatefulSet`, and the official image auto-creates the
+user/database from these same values on first boot, no manual step
+needed. **External**: set `postgres.enabled=false` and point
+`postgres.external.host`/`.port` at an instance you already run — it must
+already have a database + user matching the values below.
+
+| Helm value | Default | Backend env var | Notes |
+|---|---|---|---|
+| `postgres.auth.database` | `ifric_registry_service` | `DB_NAME` | |
+| `postgres.auth.user` | `ifric` | `DB_USER` | |
+| `postgres.auth.password` | `ifric` | `DB_PASSWORD` | Also becomes the bundled Postgres's own password; for an external instance, must match what it already expects |
+| `postgres.external.host`, `postgres.external.port` | unset, `5432` | `DB_HOST`, `DB_PORT` | Only read when `postgres.enabled=false` — ignored otherwise, the chart resolves the in-cluster Service address itself |
+| `env.dbSsl`, `env.dbSslRejectUnauthorized`, `env.dbSslCa` | `false`, `true`, unset | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | **Lives under `env.*`, not `postgres.*`**, despite being Postgres-specific — a known naming quirk in the chart, flagged here so you don't go looking for it under `postgres:`. Only matters against an external instance that requires TLS; the bundled Postgres has no TLS listener regardless |
+
+### Keycloak
+
+**Bundled by default** (`keycloak.enabled=true`). **External**: set
+`keycloak.enabled=false` and point `env.keycloak.url`/`env.keycloak.realm`
+at a realm you already run. Either way, the two client secrets below and
+the one-time realm/client/protocol-mapper setup are still required
+manually — full walkthrough: [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
 
 | Helm value | Purpose |
 |---|---|
-| `secrets.keycloakClientSecret`, `secrets.keycloakAdminClientSecret` | Keycloak client secrets — see [`docs/keycloak-setup.md`](docs/keycloak-setup.md) |
-| `env.icidServiceBackendUrl` | Only when `icid.enabled=false` (default profile) — ignored when ICID is bundled |
-| `env.companyDefaultCode` | Defaults to `IFX-COM-NAP` — only needs to actually match your ICID instance if you use company creation |
-| `secrets.companyCreationApiKey` | Auto-generated if left blank (reused across upgrades) — placeholder gate for `POST /company/create-company` |
+| `secrets.keycloakClientSecret`, `secrets.keycloakAdminClientSecret` | Required — no safe default, the backend fails fast at boot without them |
 
-**Optional** (safe defaults):
+### ICID
+
+**External by default** — point `env.icidServiceBackendUrl` at an
+instance you already run. **Bundled**: layer `values-full.yaml` on top of
+`values.yaml` (`icid.enabled=true`), which also deploys ICID's own
+required MongoDB. See [ICID Dependency](#icid-dependency) for what it's
+used for.
+
+| Helm value | Purpose |
+|---|---|
+| `env.icidServiceBackendUrl` | Required when `icid.enabled=false` (default) — ignored once ICID is bundled |
+| `env.companyDefaultCode` | Defaults to `IFX-COM-NAP` — only needs to actually match your ICID instance if you use company creation |
+
+### Everything else
 
 | Helm value | Default | Purpose |
 |---|---|---|
+| `secrets.companyCreationApiKey` | Auto-generated if left blank (reused across upgrades) | Placeholder gate for `POST /company/create-company` |
 | `secrets.hederaKeySecret` | unset | Set to enable `/certificate/*` |
-| `env.dbSsl`, `env.dbSslRejectUnauthorized`, `env.dbSslCa` | `false` / `true` / unset | TLS to an external Postgres — irrelevant to the bundled one (no TLS listener) |
 | `env.corsOrigin` | `http://localhost:3000` | Allowed browser origins |
-
-**Bundled vs. external** — Postgres and Keycloak default to bundled (the
-chart deploys them for you); ICID defaults the other way, to external
-(bring your own). Any of the three can be flipped by setting its
-`enabled` flag and supplying the matching external-connection values:
-
-| Component | Bundled | External |
-|---|---|---|
-| PostgreSQL (bundled by default) | `postgres.enabled=true` | `postgres.enabled=false` + `postgres.external.host`/`.port` |
-| Keycloak (bundled by default) | `keycloak.enabled=true` | `keycloak.enabled=false` + `env.keycloak.url`/`.realm` |
-| ICID (external by default) | `icid.enabled=true` (via `values-full.yaml`) | `icid.enabled=false` + `env.icidServiceBackendUrl` |
-
-These combine freely (e.g. bundled Keycloak + external Postgres). Full
-detail, including ICID's own MongoDB dependency and every combination:
-[`charts/ifric-registry-service/README.md`](charts/ifric-registry-service/README.md#topology-bundled-or-external-independently).
 
 ```bash
 helm install my-registry charts/ifric-registry-service \
@@ -232,7 +253,7 @@ you `helm upgrade` with the two client secrets set.
 Full install walkthrough, complete secrets reference, and every bundled-
 vs-external topology combination (Postgres/Keycloak/ICID/MongoDB, mixed
 and matched):
-[`charts/ifric-registry-service/README.md`](charts/ifric-registry-service/README.md).
+[`charts/ifric-registry-service/README.md`](charts/ifric-registry-service/README.md#topology-bundled-or-external-independently).
 
 ## Local Development
 
