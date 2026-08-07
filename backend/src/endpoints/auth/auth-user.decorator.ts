@@ -14,6 +14,14 @@
 // limitations under the License.
 //
 
-export interface UpdateCompanyProductDto {
-  product_ifric_id: string;
-}
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+import { AuthTokenClaims } from './auth-token-claims.interface';
+
+// Reads the verified token payload AuthGuard already attached to
+// request.user — only valid on routes guarded by AuthGuard.
+export const AuthUser = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): AuthTokenClaims => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.user;
+  },
+);

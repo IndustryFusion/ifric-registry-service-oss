@@ -95,20 +95,20 @@ external Keycloak, in which case skip to step 5).
 
 **3. Configure Keycloak** (bundled, comes up empty — one-time manual step):
 
+Full walkthrough (realm, both clients, the two protocol mappers):
+[`../../docs/keycloak-setup.md`](../../docs/keycloak-setup.md#kubernetes-helm).
+Short version:
+
 ```bash
 kubectl get secret my-registry-ifric-registry-service-secret \
   -o jsonpath='{.data.KEYCLOAK_ADMIN_PASSWORD}' | base64 -d
 kubectl port-forward svc/my-registry-ifric-registry-service-keycloak 8080:8080
 ```
 
-Open `http://localhost:8080`, log in as `admin` with the password above, then:
-
-1. Create a realm (e.g. `ifric`).
-2. Create a **confidential** client `ifric` with **Direct Access Grants**
-   enabled. Copy its secret (Clients → `ifric` → Credentials).
-3. Create a second **confidential** client `ifric-admin` with its
-   **service account** enabled, granted the `realm-management` client's
-   `manage-users` role. Copy its secret.
+Open `http://localhost:8080`, log in as `admin` with the password above,
+then create the realm, the `ifric`/`ifric-admin` clients, and the two
+`company_ifric_id`/`user_id` protocol mappers on `ifric` as described in
+that doc.
 
 **4. Give the backend those secrets:**
 
@@ -139,8 +139,9 @@ curl http://localhost:4007/api-docs
 | `secrets.keycloakClientSecret` | `""` | From step 3.2 above |
 | `secrets.keycloakAdminClientSecret` | `""` | From step 3.3 above |
 | `secrets.hederaKeySecret` | `""` | Optional — unset disables `/certificate/*` |
+| `secrets.companyCreationApiKey` | auto-generated | Placeholder gate for `POST /company/create-company` (`X-API-Key` header) ahead of a real external-API-token flow; reused across upgrades like `keycloakAdminPassword` |
 | `postgres.auth.password` | `ifric` | Also the password used to connect to an external Postgres — set it to match. Changing it post-install doesn't rotate it inside an already-initialized bundled Postgres volume. |
-| `secrets.existingSecret` | `""` | Name of a Secret you manage yourself (Vault, Sealed Secrets, ...) with keys `KEYCLOAK_ADMIN_PASSWORD`/`KEYCLOAK_CLIENT_SECRET`/`KEYCLOAK_ADMIN_CLIENT_SECRET`/`HEDERA_KEY_SECRET`/`DB_PASSWORD` — when set, overrides all of the above |
+| `secrets.existingSecret` | `""` | Name of a Secret you manage yourself (Vault, Sealed Secrets, ...) with keys `KEYCLOAK_ADMIN_PASSWORD`/`KEYCLOAK_CLIENT_SECRET`/`KEYCLOAK_ADMIN_CLIENT_SECRET`/`HEDERA_KEY_SECRET`/`COMPANY_CREATION_API_KEY`/`DB_PASSWORD` — when set, overrides all of the above |
 
 **Values** (full list with comments in `values.yaml`, mirrors `backend/.env.example`):
 
@@ -148,6 +149,7 @@ curl http://localhost:4007/api-docs
 |---|---|---|
 | `replicaCount` | `1` | Backend replica count |
 | `postgres.enabled` | `true` | Set `false` + `postgres.external.host`/`.port` for an external instance |
+| `env.dbSsl` | `false` | Backend defaults `DB_SSL` on; chart sets it `false` since the bundled Postgres has no TLS listener — set `true` once pointed at an external instance that requires TLS. See `values.yaml` for `dbSslRejectUnauthorized`/`dbSslCa` |
 | `postgres.persistence.enabled` | `true` | Set `false` for ephemeral storage — testing only; ignored when `postgres.enabled=false` |
 | `keycloak.enabled` | `true` | Set `false` + `env.keycloak.url`/`.realm` for an external instance |
 | `icid.enabled` | `false` | Set via `values-full.yaml`; `false` needs `env.icidServiceBackendUrl` pointed at an external instance |

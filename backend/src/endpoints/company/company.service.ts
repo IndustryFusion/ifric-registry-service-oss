@@ -23,46 +23,37 @@ import { getCountryCode, countries } from 'countries-list';
 import * as generator from 'generate-password';
 import {
   Company,
-  CompanyTwin,
+  Asset,
   Factory,
   CompanyUser,
   CompanyCategory,
   CompanyCategoryMapping,
-  CompanyAsset,
   CompanyGateWay,
   CompanyServer,
-  CompanyProduct,
   Product,
   AccessGroup,
-  UserProductAccessGroup,
+  UserAccessGroup,
 } from 'src/entities';
 import { COMPANY_CATEGORY_NAMES } from 'src/common/company-category.constants';
 import { CertificateService } from '../certificate/certificate.service';
 import { KeycloakService } from '../auth/keycloak.service';
 import { RegisterAuthDto, AddStatusDto } from '../auth/dto/register-auth.dto';
-import { CompanyAssetDto } from '../auth/dto/company-asset.dto';
+import { CompanyDeviceDto } from '../auth/dto/company-device.dto';
 import { AccessGroupDto } from '../auth/dto/access-group.dto';
 import { UpdateAccessGroupDto } from './dto/update-access-group.dto';
 import { CreateFactoryDto } from './dto/create-factory.dto';
 import { UpdateFactoryDto } from './dto/update-factory.dto';
 import { envConstants } from 'src/common/env.constants';
-
-// Default internal-module product identifiers granted to every new
-// company/admin user — placeholders, replace with your own module lineup
-// before a real deployment. Not a local Product catalog lookup: these are
-// plain identifiers, stored directly on CompanyProduct/UserProductAccessGroup.
-const DEFAULT_PRODUCT_NAMES = [
-  'Example Product A',
-  'Example Product B',
-  'Example Product C',
-];
+import { generateId } from 'src/database/generate-id';
+import { AccessControlService } from 'src/common/access-control.service';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 
 @Injectable()
 export class CompanyService {
   constructor(
     @InjectRepository(Company) private companyRepository: Repository<Company>,
-    @InjectRepository(CompanyTwin)
-    private companyTwinRepository: Repository<CompanyTwin>,
+    @InjectRepository(Asset)
+    private assetRepository: Repository<Asset>,
     @InjectRepository(Factory) private factoryRepository: Repository<Factory>,
     @InjectRepository(CompanyUser)
     private companyUserRepository: Repository<CompanyUser>,
@@ -70,21 +61,18 @@ export class CompanyService {
     private companyCategoryRepository: Repository<CompanyCategory>,
     @InjectRepository(CompanyCategoryMapping)
     private companyCategoryMappingRepository: Repository<CompanyCategoryMapping>,
-    @InjectRepository(CompanyAsset)
-    private companyAssetRepository: Repository<CompanyAsset>,
     @InjectRepository(CompanyGateWay)
     private companyGateWayRepository: Repository<CompanyGateWay>,
     @InjectRepository(CompanyServer)
     private companyServerRepository: Repository<CompanyServer>,
-    @InjectRepository(CompanyProduct)
-    private companyProductRepository: Repository<CompanyProduct>,
     @InjectRepository(Product) private productRepository: Repository<Product>,
     @InjectRepository(AccessGroup)
     private accessGroupRepository: Repository<AccessGroup>,
-    @InjectRepository(UserProductAccessGroup)
-    private userProductAccessGroupRepository: Repository<UserProductAccessGroup>,
+    @InjectRepository(UserAccessGroup)
+    private userAccessGroupRepository: Repository<UserAccessGroup>,
     private readonly certificateService: CertificateService,
     private keycloakService: KeycloakService,
+    private readonly accessControlService: AccessControlService,
     @InjectDataSource() private readonly dataSource: DataSource,
   ) {}
 
@@ -100,16 +88,30 @@ export class CompanyService {
   // src/endpoints/product/product.service.ts.
   // ===========================================================================
 
+  // Unscoped only when called with no filter (list-all-factories is a
+  // deliberate cross-company directory, same as getAllCompanies) —
+  // scoped whenever a specific owner company is named.
   async getFactories(
-    ownerCompanyIfricId?: string,
+    ownerCompanyIfricId: string | undefined,
+    authUser: AuthTokenClaims,
   ): Promise<Record<string, any>[]> {
+    if (ownerCompanyIfricId) {
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        ownerCompanyIfricId,
+      );
+      await this.accessControlService.assertPermission(authUser, 'read');
+    }
     const where = ownerCompanyIfricId
       ? { owner_company_ifric_id: ownerCompanyIfricId }
       : {};
     return this.factoryRepository.find({ where });
   }
 
-  async getFactoryById(factoryId: string): Promise<Record<string, any>> {
+  async getFactoryById(
+    factoryId: string,
+    authUser: AuthTokenClaims,
+  ): Promise<Record<string, any>> {
     const factory = await this.factoryRepository.findOne({
       where: { factory_id: factoryId },
     });
@@ -119,10 +121,18 @@ export class CompanyService {
         message: `No factory data found for factory id: ${factoryId}`,
       };
     }
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      factory.owner_company_ifric_id,
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
     return factory;
   }
 
-  async getFactoryOwner(factoryId: string): Promise<Record<string, any>> {
+  async getFactoryOwner(
+    factoryId: string,
+    authUser: AuthTokenClaims,
+  ): Promise<Record<string, any>> {
     const factory = await this.factoryRepository.findOne({
       where: { factory_id: factoryId },
     });
@@ -132,6 +142,11 @@ export class CompanyService {
         message: `No factory data found for factory id: ${factoryId}`,
       };
     }
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      factory.owner_company_ifric_id,
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
 
     const owner = await this.companyRepository.findOne({
       where: { company_ifric_id: factory.owner_company_ifric_id },
@@ -145,14 +160,29 @@ export class CompanyService {
     return owner;
   }
 
-  async getFactoryProducts(factoryId: string): Promise<string[]> {
-    const twins = await this.companyTwinRepository.find({
+  async getFactoryProducts(
+    factoryId: string,
+    authUser: AuthTokenClaims,
+  ): Promise<string[]> {
+    const factory = await this.factoryRepository.findOne({
       where: { factory_id: factoryId },
     });
-    return twins.map((twin) => twin.asset_ifric_id);
+    if (!factory) {
+      return [];
+    }
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      factory.owner_company_ifric_id,
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
+
+    const assets = await this.assetRepository.find({
+      where: { factory_id: factoryId },
+    });
+    return assets.map((asset) => asset.asset_ifric_id);
   }
 
-  async createFactory(data: CreateFactoryDto) {
+  async createFactory(data: CreateFactoryDto, authUser: AuthTokenClaims) {
     try {
       const ownerCompany = await this.companyRepository.find({
         where: { company_ifric_id: data.owner_company_ifric_id },
@@ -163,6 +193,12 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        data.owner_company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'create');
+
       const existing = await this.factoryRepository.find({
         where: { factory_id: data.factory_id },
       });
@@ -186,8 +222,27 @@ export class CompanyService {
     }
   }
 
-  async updateFactory(factoryId: string, data: UpdateFactoryDto) {
+  async updateFactory(
+    factoryId: string,
+    data: UpdateFactoryDto,
+    authUser: AuthTokenClaims,
+  ) {
     try {
+      const factory = await this.factoryRepository.findOne({
+        where: { factory_id: factoryId },
+      });
+      if (!factory) {
+        throw new HttpException(
+          'No factory found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        factory.owner_company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'update');
+
       const result = await this.factoryRepository.update(
         { factory_id: factoryId },
         data,
@@ -210,14 +265,29 @@ export class CompanyService {
     }
   }
 
-  async deleteFactory(factoryId: string) {
+  async deleteFactory(factoryId: string, authUser: AuthTokenClaims) {
     try {
-      const twinsAtFactory = await this.companyTwinRepository.find({
+      const factory = await this.factoryRepository.findOne({
         where: { factory_id: factoryId },
       });
-      if (twinsAtFactory.length > 0) {
+      if (!factory) {
         throw new HttpException(
-          'Cannot delete factory: still referenced by company twins',
+          'No factory found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        factory.owner_company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'delete');
+
+      const assetsAtFactory = await this.assetRepository.find({
+        where: { factory_id: factoryId },
+      });
+      if (assetsAtFactory.length > 0) {
+        throw new HttpException(
+          'Cannot delete factory: still referenced by an asset',
           HttpStatus.CONFLICT,
         );
       }
@@ -342,21 +412,6 @@ export class CompanyService {
         }),
       );
 
-      // Default internal-module product identifiers — matches
-      // DEFAULT_PRODUCT_NAMES. These aren't looked up in a local catalog:
-      // product data lives in an external system, so linking never fails
-      // on seed state — a fresh company always gets these links regardless
-      // of whether /script/create-product was ever run.
-      for (const name of DEFAULT_PRODUCT_NAMES) {
-        await queryRunner.manager.save(
-          CompanyProduct,
-          queryRunner.manager.create(CompanyProduct, {
-            product_ifric_id: name,
-            company_id: company._id,
-          }),
-        );
-      }
-
       await queryRunner.manager.save(AccessGroup, [
         queryRunner.manager.create(AccessGroup, {
           company_id: company._id,
@@ -386,16 +441,28 @@ export class CompanyService {
         throw new HttpException('User already exists', HttpStatus.CONFLICT);
       }
 
+      // Pre-generated so it can be stamped onto the Keycloak identity below
+      // before the CompanyUser row exists — BaseEntity.assignId() only
+      // fills _id in when it's unset, so passing it explicitly here is
+      // preserved as-is.
+      const adminUserId = generateId();
+
       // Provision the identity in Keycloak — credentials live there, not
-      // in this table.
+      // in this table. company_ifric_id/user_id are stored as Keycloak user
+      // attributes and projected into access tokens via a realm protocol
+      // mapper (see README.md), so every company-scoped endpoint can check
+      // the caller's own company/user against the request instead of
+      // trusting body-supplied ids.
       await this.keycloakService.createUser(
         data.email,
         data.admin_name,
         temporaryPassword,
+        { company_ifric_id: data.company_ifric_id, user_id: adminUserId },
       );
       const user = await queryRunner.manager.save(
         CompanyUser,
         queryRunner.manager.create(CompanyUser, {
+          _id: adminUserId,
           company_id: company._id,
           user_email: data.email,
           user_name: data.admin_name,
@@ -407,21 +474,16 @@ export class CompanyService {
         }),
       );
 
-      const products = DEFAULT_PRODUCT_NAMES.map((product) => ({
-        product,
-        user_role: 'admin',
-      }));
-      for (const p of products) {
-        const accessGroup = await queryRunner.manager.findOne(AccessGroup, {
-          where: { company_id: company._id, group_name: p.user_role },
-        });
-        if (!accessGroup) continue;
+      // Grant the new admin their one AccessGroup role for this company.
+      const adminAccessGroup = await queryRunner.manager.findOne(AccessGroup, {
+        where: { company_id: company._id, group_name: 'admin' },
+      });
+      if (adminAccessGroup) {
         await queryRunner.manager.save(
-          UserProductAccessGroup,
-          queryRunner.manager.create(UserProductAccessGroup, {
+          UserAccessGroup,
+          queryRunner.manager.create(UserAccessGroup, {
             user_id: user._id,
-            product_ifric_id: p.product,
-            access_group_id: accessGroup._id,
+            access_group_id: adminAccessGroup._id,
           }),
         );
       }
@@ -459,7 +521,9 @@ export class CompanyService {
     }
   }
 
-  async createCompanyAsset(data: CompanyAssetDto) {
+  // "asset" was dropped from this discriminator — POST /company/assets
+  // supersedes it (see AssetService). Only gateway/server remain here.
+  async createCompanyDevice(data: CompanyDeviceDto, authUser: AuthTokenClaims) {
     try {
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: data.company_ifric_id },
@@ -470,23 +534,13 @@ export class CompanyService {
           HttpStatus.CONFLICT,
         );
       }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        data.company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'create');
 
       switch (data.type) {
-        case 'asset': {
-          if (!data.asset_ifric_id) {
-            throw new HttpException(
-              'asset_ifric_id is required when type is "asset"',
-              HttpStatus.BAD_REQUEST,
-            );
-          }
-          await this.companyAssetRepository.save(
-            this.companyAssetRepository.create({
-              company_id: companyData[0]._id,
-              asset_ifric_id: data.asset_ifric_id,
-            }),
-          );
-          break;
-        }
         case 'gateway': {
           if (!data.gateway_ifric_id) {
             throw new HttpException(
@@ -519,7 +573,7 @@ export class CompanyService {
         }
         default:
           throw new HttpException(
-            'type must be one of "asset", "gateway", "server"',
+            'type must be one of "gateway", "server"',
             HttpStatus.BAD_REQUEST,
           );
       }
@@ -593,84 +647,6 @@ export class CompanyService {
         status: 201,
         message: 'Status added successfully',
       };
-    } catch (err) {
-      if (err instanceof HttpException) {
-        throw err;
-      } else if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
-      } else {
-        throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-    }
-  }
-
-  async getCompanyAssetsbyAsset(id: string) {
-    try {
-      const response = await this.companyAssetRepository.find({
-        where: { asset_ifric_id: id },
-      });
-      if (response.length === 0) {
-        const twinResponse = await this.companyTwinRepository.find({
-          where: { asset_ifric_id: id },
-        });
-        if (twinResponse.length === 0) {
-          throw new HttpException(
-            'No Asset found with the provided ID',
-            HttpStatus.NOT_FOUND,
-          );
-        }
-        const responseComapny = await this.companyRepository.find({
-          where: { _id: twinResponse[0].owner_company_id },
-        });
-        return responseComapny[0];
-      } else {
-        const responseComapny = await this.companyRepository.find({
-          where: { _id: response[0].company_id },
-        });
-        return responseComapny[0];
-      }
-    } catch (err) {
-      if (err instanceof HttpException) {
-        throw err;
-      } else if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
-      } else {
-        throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-    }
-  }
-
-  async getCompanyAssetByAssetId(asset_ifric_id: string) {
-    try {
-      return await this.companyAssetRepository.find({
-        where: { asset_ifric_id },
-      });
-    } catch (err) {
-      if (err instanceof HttpException) {
-        throw err;
-      } else if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
-      } else {
-        throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-    }
-  }
-
-  async getCompanyAssets(id: string) {
-    try {
-      const response = await this.companyRepository.find({
-        where: { company_ifric_id: id },
-      });
-      if (response.length === 0) {
-        throw new HttpException(
-          'No company found with the provided ID',
-          HttpStatus.NOT_FOUND,
-        );
-      }
-
-      return await this.companyAssetRepository.find({
-        where: { company_id: response[0]._id },
-      });
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -782,8 +758,11 @@ export class CompanyService {
     }
   }
 
-  async getCompanyDetails(id: string) {
+  async getCompanyDetails(id: string, authUser: AuthTokenClaims) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'read');
+
       return await this.companyRepository.find({
         where: { company_ifric_id: id },
       });
@@ -798,9 +777,19 @@ export class CompanyService {
     }
   }
 
-  async getCompanyDetailsbyRecord(id: string) {
+  async getCompanyDetailsbyRecord(id: string, authUser: AuthTokenClaims) {
     try {
-      return await this.companyRepository.find({ where: { _id: id } });
+      const companies = await this.companyRepository.find({
+        where: { _id: id },
+      });
+      if (companies.length) {
+        this.accessControlService.assertCompanyMatch(
+          authUser,
+          companies[0].company_ifric_id,
+        );
+        await this.accessControlService.assertPermission(authUser, 'read');
+      }
+      return companies;
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -815,7 +804,10 @@ export class CompanyService {
   // Ported from a $match+$project aggregation with an explicit `_id: 0`
   // exclusion — this response never included `_id`/`__v`, unlike most other
   // endpoints in this file that return raw documents.
-  async getCompanyContactDetails(company_ifric_id: string) {
+  async getCompanyContactDetails(
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const company = await this.companyRepository.findOne({
         where: { company_ifric_id },
@@ -823,6 +815,9 @@ export class CompanyService {
       if (!company) {
         return [];
       }
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
+
       return [
         {
           admin_name: company.admin_name,
@@ -930,7 +925,10 @@ export class CompanyService {
   // absent, regardless of what products are actually tagged. Reproduced
   // as-is here (not "fixed") since this port's job is behavioral parity,
   // not a product-catalog redesign.
-  async getCompanyAndUserDetails(company_ifric_id: string) {
+  async getCompanyAndUserDetails(
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const company = await this.companyRepository.findOne({
         where: { company_ifric_id },
@@ -938,6 +936,8 @@ export class CompanyService {
       if (!company) {
         return [];
       }
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       const mapping = await this.companyCategoryMappingRepository.find({
         where: { company_id: company._id },
@@ -953,7 +953,7 @@ export class CompanyService {
       });
       const companyUsers = [];
       for (const user of users) {
-        const accessRows = await this.userProductAccessGroupRepository.find({
+        const accessRows = await this.userAccessGroupRepository.find({
           where: { user_id: user._id },
         });
         if (accessRows.length === 0) {
@@ -1090,11 +1090,14 @@ export class CompanyService {
     }
   }
 
-  // Ported from a self-join aggregation (Company -> CompanyTwin -> Company).
-  // The original's explicit $toString ObjectId casts on both sides of the
-  // join are unnecessary here — every id is already a plain string under
-  // this migration's ID strategy, so this is a genuinely simpler port.
-  async getUniqueOwnerCompanies(company_ifric_id: string) {
+  // Ported from a self-join aggregation (Company -> Asset -> Company). The
+  // original's explicit $toString ObjectId casts on both sides of the join
+  // are unnecessary here — every id is already a plain string under this
+  // migration's ID strategy, so this is a genuinely simpler port.
+  async getUniqueOwnerCompanies(
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const company = await this.companyRepository.findOne({
         where: { company_ifric_id },
@@ -1102,10 +1105,12 @@ export class CompanyService {
       if (!company) {
         return [];
       }
-      const twins = await this.companyTwinRepository.find({
-        where: { manufacturer_company_id: company._id },
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
+      const assets = await this.assetRepository.find({
+        where: { company_id: company._id, is_twin: true },
       });
-      const ownerIds = [...new Set(twins.map((t) => t.owner_company_id))];
+      const ownerIds = [...new Set(assets.map((a) => a.owner_company_id))];
       if (!ownerIds.length) {
         return [];
       }
@@ -1308,7 +1313,11 @@ export class CompanyService {
     }
   }
 
-  async updateCompany(id: string, data: RegisterAuthDto) {
+  async updateCompany(
+    id: string,
+    data: RegisterAuthDto,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: id },
@@ -1319,6 +1328,8 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'update');
 
       // company_category isn't a Company column — it lives on
       // CompanyCategoryMapping (see createCompany), so companyRepository.update
@@ -1397,7 +1408,7 @@ export class CompanyService {
     }
   }
 
-  async deleteCompany(id: string) {
+  async deleteCompany(id: string, authUser: AuthTokenClaims) {
     try {
       const companyResponse = await this.companyRepository.find({
         where: { company_ifric_id: id },
@@ -1408,31 +1419,32 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'delete');
 
       const companyId = companyResponse[0]._id;
 
       // Fixed (per migration plan, not a Mongo-behavior-preserving port):
       // fetch the company's users BEFORE deleting them below, so their
-      // UserProductAccessGroup rows can actually be cascade-deleted. The
-      // Mongo version re-queried CompanyUser for this AFTER already
-      // deleting them, so the cascade loop never ran and those rows were
-      // silently orphaned on every company delete.
+      // UserAccessGroup rows can actually be cascade-deleted. The Mongo
+      // version re-queried CompanyUser for this AFTER already deleting
+      // them, so the cascade loop never ran and those rows were silently
+      // orphaned on every company delete.
       const companyUser = await this.companyUserRepository.find({
         where: { company_id: companyId },
       });
 
-      await this.companyProductRepository.delete({ company_id: companyId });
       await this.companyUserRepository.delete({ company_id: companyId });
       await this.accessGroupRepository.delete({ company_id: companyId });
       await this.companyCategoryMappingRepository.delete({
         company_id: companyId,
       });
-      await this.companyAssetRepository.delete({ company_id: companyId });
+      await this.assetRepository.delete({ company_id: companyId });
       await this.companyGateWayRepository.delete({ company_id: companyId });
       await this.companyServerRepository.delete({ company_id: companyId });
       if (companyUser.length > 0) {
         for (const user of companyUser) {
-          await this.userProductAccessGroupRepository.delete({
+          await this.userAccessGroupRepository.delete({
             user_id: user._id,
           });
         }
@@ -1466,38 +1478,26 @@ export class CompanyService {
     }
   }
 
-  async deleteCompanyAsset(id: string) {
+  async deleteCompanyGateway(id: string, authUser: AuthTokenClaims) {
     try {
-      return await this.companyAssetRepository.delete({ asset_ifric_id: id });
-    } catch (err) {
-      if (err instanceof HttpException) {
-        throw err;
-      } else if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
-      } else {
-        throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-    }
-  }
-
-  async deleteCompanyAssets(assetIds: string[]) {
-    try {
-      return await this.companyAssetRepository.delete({
-        asset_ifric_id: In(assetIds),
+      const gateway = await this.companyGateWayRepository.findOne({
+        where: { _id: id },
       });
-    } catch (err) {
-      if (err instanceof HttpException) {
-        throw err;
-      } else if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
-      } else {
-        throw new HttpException(err.message, HttpStatus.INTERNAL_SERVER_ERROR);
+      if (!gateway) {
+        throw new HttpException(
+          'No gateway found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
       }
-    }
-  }
+      const company = await this.companyRepository.findOne({
+        where: { _id: gateway.company_id },
+      });
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        company?.company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'delete');
 
-  async deleteCompanyGateway(id: string) {
-    try {
       return await this.companyGateWayRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {
@@ -1510,8 +1510,26 @@ export class CompanyService {
     }
   }
 
-  async deleteCompanyServer(id: string) {
+  async deleteCompanyServer(id: string, authUser: AuthTokenClaims) {
     try {
+      const server = await this.companyServerRepository.findOne({
+        where: { _id: id },
+      });
+      if (!server) {
+        throw new HttpException(
+          'No server found with the provided ID',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      const company = await this.companyRepository.findOne({
+        where: { _id: server.company_id },
+      });
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        company?.company_ifric_id,
+      );
+      await this.accessControlService.assertPermission(authUser, 'delete');
+
       return await this.companyServerRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {

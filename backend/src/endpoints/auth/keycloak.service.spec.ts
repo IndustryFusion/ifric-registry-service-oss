@@ -265,6 +265,82 @@ describe('KeycloakService', () => {
         service.createUser('ghost@example.com', 'Ghost', 'pw'),
       ).rejects.toThrow(HttpException);
     });
+
+    it('stamps attributes as single-element arrays when provided', async () => {
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: [{ id: 'new-kc-user' }],
+      });
+
+      await service.createUser('new@example.com', 'New User', 'temp-pw', {
+        company_ifric_id: 'urn:ifric:ifx-eur-com-own-1',
+        user_id: '605f5a3e1c9d440000a1b2c3',
+      });
+
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/users'),
+        expect.objectContaining({
+          attributes: {
+            company_ifric_id: ['urn:ifric:ifx-eur-com-own-1'],
+            user_id: ['605f5a3e1c9d440000a1b2c3'],
+          },
+        }),
+        expect.any(Object),
+      );
+    });
+
+    it('omits the attributes field entirely when none are given', async () => {
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: [{ id: 'new-kc-user' }],
+      });
+
+      await service.createUser('new@example.com', 'New User', 'temp-pw');
+
+      const [, body] = (axios.post as jest.Mock).mock.calls.find(([url]) =>
+        url.includes('/users'),
+      );
+      expect(body).not.toHaveProperty('attributes');
+    });
+  });
+
+  describe('setUserAttributes', () => {
+    it('PUTs the attributes as single-element arrays', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: [{ id: 'kc-user-1' }],
+      });
+      (axios.put as jest.Mock).mockResolvedValue({});
+
+      await service.setUserAttributes('user@example.com', {
+        company_ifric_id: 'urn:ifric:ifx-eur-com-own-1',
+        user_id: '605f5a3e1c9d440000a1b2c3',
+      });
+
+      expect(axios.put).toHaveBeenCalledWith(
+        expect.stringContaining('/users/kc-user-1'),
+        {
+          attributes: {
+            company_ifric_id: ['urn:ifric:ifx-eur-com-own-1'],
+            user_id: ['605f5a3e1c9d440000a1b2c3'],
+          },
+        },
+        expect.any(Object),
+      );
+    });
+
+    it('throws NOT_FOUND when the user does not exist in Keycloak', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({ data: [] });
+
+      await expect(
+        service.setUserAttributes('nobody@example.com', {
+          company_ifric_id: 'urn:ifric:ifx-eur-com-own-1',
+        }),
+      ).rejects.toMatchObject({ status: 404 });
+    });
   });
 
   describe('setPassword', () => {

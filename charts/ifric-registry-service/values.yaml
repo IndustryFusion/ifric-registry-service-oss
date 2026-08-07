@@ -44,6 +44,18 @@ env:
     realm: ""
     clientId: "ifric"
     adminClientId: "ifric-admin"
+  # Enables TLS on this app's connection to Postgres. The backend itself
+  # defaults DB_SSL to on, but this chart explicitly sets it false here
+  # since the bundled postgres.enabled=true StatefulSet has no TLS
+  # listener — flip to true only once pointed at a real external instance
+  # via postgres.external.host that requires TLS. See backend/.env.example.
+  dbSsl: false
+  dbSslRejectUnauthorized: true
+  # PEM contents of a custom/private CA cert, for a self-signed or
+  # private-CA external Postgres. This is the public verification half of
+  # a CA (not a credential), so it's kept here rather than under
+  # `secrets:` — unlike hederaKeySecret/keycloak*Secret.
+  dbSslCa: ""
 
 # Secrets — never commit real values here. Use --set, a separate untracked
 # values file, or (recommended for real deployments) set
@@ -64,6 +76,13 @@ secrets:
   # auth mode that works without Keycloak.
   keycloakClientSecret: ""
   keycloakAdminClientSecret: ""
+  # Placeholder gate for POST /company/create-company ahead of a real
+  # external-API-token flow — checked against the X-API-Key header. Unlike
+  # the Keycloak client secrets above, this is entirely internal to this
+  # chart (no external system to configure first), so leaving it blank
+  # auto-generates one on first install and reuses it on every later
+  # `helm upgrade` — same pattern as keycloakAdminPassword below.
+  companyCreationApiKey: ""
   # Optional — Keycloak's own admin-console login password for this
   # release's bundled instance (only relevant when keycloak.enabled=true).
   # Leave blank and the chart generates a random one on first install, then
@@ -74,8 +93,9 @@ secrets:
   keycloakAdminPassword: ""
   # Name of a pre-existing Secret with keys KEYCLOAK_ADMIN_PASSWORD,
   # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_ADMIN_CLIENT_SECRET, HEDERA_KEY_SECRET,
-  # and DB_PASSWORD. When set, the values above (and postgres.auth.password)
-  # are ignored and this chart creates no Secret of its own.
+  # COMPANY_CREATION_API_KEY, and DB_PASSWORD. When set, the values above
+  # (and postgres.auth.password) are ignored and this chart creates no
+  # Secret of its own.
   existingSecret: ""
 
 resources: {}

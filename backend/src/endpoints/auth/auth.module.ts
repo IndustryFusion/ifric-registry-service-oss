@@ -26,9 +26,7 @@ import {
   CompanyCategory,
   AccessGroup,
   CompanyCategoryMapping,
-  UserProductAccessGroup,
-  CompanyProduct,
-  CompanyTwin,
+  UserAccessGroup,
 } from 'src/entities';
 
 @Module({
@@ -39,9 +37,7 @@ import {
       CompanyCategory,
       AccessGroup,
       CompanyCategoryMapping,
-      UserProductAccessGroup,
-      CompanyProduct,
-      CompanyTwin,
+      UserAccessGroup,
     ]),
     KeycloakModule,
   ],

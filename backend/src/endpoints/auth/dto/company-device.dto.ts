@@ -14,14 +14,11 @@
 // limitations under the License.
 //
 
-import { Column, Entity } from 'typeorm';
-import { BaseEntity } from '../database/base.entity';
-
-@Entity('company_assets')
-export class CompanyAsset extends BaseEntity {
-  @Column({ type: 'char', length: 24, nullable: true })
-  company_id: string;
-
-  @Column({ type: 'varchar', nullable: true })
-  asset_ifric_id: string;
+// "asset" was dropped — POST /company/assets (AssetService) supersedes it.
+// This DTO now only covers POST /company/devices (gateway/server).
+export interface CompanyDeviceDto {
+  type: 'gateway' | 'server';
+  company_ifric_id: string;
+  gateway_ifric_id?: string;
+  server_ifric_id?: string;
 }

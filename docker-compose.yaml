@@ -74,6 +74,10 @@ services:
       - DB_USER=ifric
       - DB_PASSWORD=ifric
       - DB_NAME=ifric_registry_service
+      # DB_SSL now defaults to on (see backend/.env.example) — explicitly
+      # disabled here since the bundled postgres service above has no TLS
+      # listener.
+      - DB_SSL=false
     restart: "no"
     depends_on:
       postgres:
@@ -90,12 +94,16 @@ services:
     environment:
       # Overrides whatever DB_* vars are in backend/.env — the compose
       # topology (service name "postgres") is fixed by this file, not
-      # something each user should have to hand-edit into .env.
+      # something each user should have to hand-edit into .env. DB_SSL
+      # defaults to on (see backend/.env.example) but is explicitly
+      # disabled here — the bundled postgres service above has no TLS
+      # listener.
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=ifric
       - DB_PASSWORD=ifric
       - DB_NAME=ifric_registry_service
+      - DB_SSL=false
     depends_on:
       migrate:
         condition: service_completed_successfully

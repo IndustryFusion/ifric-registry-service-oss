@@ -14,16 +14,19 @@
 // limitations under the License.
 //
 
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ProductController } from './product.controller';
-import { ProductService } from './product.service';
-import { Product } from 'src/entities';
-import { AuthModule } from '../auth/auth.module';
+import { AccessGroup, UserAccessGroup } from 'src/entities';
+import { AccessControlService } from './access-control.service';
 
+// @Global() so AccessControlService resolves for every module without each
+// one re-importing it — same rationale as KeycloakModule, since company/
+// RBAC scoping is a cross-cutting concern needed by CompanyModule,
+// ProductModule, and AuthModule alike.
+@Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([Product]), AuthModule],
-  controllers: [ProductController],
-  providers: [ProductService],
+  imports: [TypeOrmModule.forFeature([AccessGroup, UserAccessGroup])],
+  providers: [AccessControlService],
+  exports: [AccessControlService],
 })
-export class ProductModule {}
+export class AccessControlModule {}

@@ -779,13 +779,13 @@ paths:
       summary: Get all product URNs located at a factory id
       tags:
         - Company
-  /company/company-asset:
+  /company/devices:
     post:
-      operationId: CompanyController_createCompanyAsset
+      operationId: CompanyController_createCompanyDevice
       parameters: []
       requestBody:
         required: true
-        description: Details for creating a company asset
+        description: Details for creating a company gateway/server
         content:
           application/json:
             schema:
@@ -797,17 +797,12 @@ paths:
                 type:
                   type: string
                   enum:
-                    - asset
                     - gateway
                     - server
-                  example: asset
+                  example: gateway
                 company_ifric_id:
                   type: string
                   example: IFRIC12345
-                asset_ifric_id:
-                  type: string
-                  description: Required when type is "asset"
-                  example: ASSET67890
                 gateway_ifric_id:
                   type: string
                   description: Required when type is "gateway"

@@ -18,20 +18,19 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CompanyController } from './company.controller';
 import { CompanyService } from './company.service';
+import { AssetService } from './asset.service';
 import {
   Company,
-  CompanyTwin,
+  Asset,
   Factory,
   CompanyUser,
   CompanyCategory,
   CompanyCategoryMapping,
-  CompanyAsset,
   CompanyGateWay,
   CompanyServer,
-  CompanyProduct,
   Product,
   AccessGroup,
-  UserProductAccessGroup,
+  UserAccessGroup,
 } from 'src/entities';
 import { AuthModule } from '../auth/auth.module';
 import { CertificateModule } from '../certificate/certificate.module';
@@ -40,23 +39,21 @@ import { CertificateModule } from '../certificate/certificate.module';
   imports: [
     TypeOrmModule.forFeature([
       Company,
-      CompanyTwin,
+      Asset,
       Factory,
       CompanyUser,
       CompanyCategory,
       CompanyCategoryMapping,
-      CompanyAsset,
       CompanyGateWay,
       CompanyServer,
-      CompanyProduct,
       Product,
       AccessGroup,
-      UserProductAccessGroup,
+      UserAccessGroup,
     ]),
     AuthModule,
     CertificateModule,
   ],
   controllers: [CompanyController],
-  providers: [CompanyService],
+  providers: [CompanyService, AssetService],
 })
 export class CompanyModule {}

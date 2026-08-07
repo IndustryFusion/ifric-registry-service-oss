@@ -26,10 +26,9 @@ import {
   CompanyCategory,
   AccessGroup,
   CompanyCategoryMapping,
-  UserProductAccessGroup,
-  CompanyProduct,
-  CompanyTwin,
+  UserAccessGroup,
 } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -58,15 +57,19 @@ describe('AuthService', () => {
   };
   let companyCategoryRepository: { findOne: jest.Mock };
   let companyCategoryMappingRepository: { find: jest.Mock };
-  let companyProductRepository: { findOne: jest.Mock };
-  let userProductAccessGroupRepository: {
+  let userAccessGroupRepository: {
     find: jest.Mock;
+    findOne: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
     query: jest.Mock;
     delete: jest.Mock;
   };
   let accessGroupRepository: { findOne: jest.Mock; find: jest.Mock };
+  let accessControlService: {
+    assertCompanyMatch: jest.Mock;
+    assertPermission: jest.Mock;
+  };
 
   beforeEach(async () => {
     keycloakService = {
@@ -99,10 +102,10 @@ describe('AuthService', () => {
 
     companyCategoryRepository = { findOne: jest.fn() };
     companyCategoryMappingRepository = { find: jest.fn() };
-    companyProductRepository = { findOne: jest.fn() };
 
-    userProductAccessGroupRepository = {
+    userAccessGroupRepository = {
       find: jest.fn(),
+      findOne: jest.fn(),
       create: jest.fn((x) => x),
       save: jest.fn(),
       query: jest.fn(),
@@ -110,11 +113,16 @@ describe('AuthService', () => {
     };
 
     accessGroupRepository = { findOne: jest.fn(), find: jest.fn() };
+    accessControlService = {
+      assertCompanyMatch: jest.fn(),
+      assertPermission: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: CACHE_MANAGER, useValue: {} },
+        { provide: AccessControlService, useValue: accessControlService },
         { provide: getRepositoryToken(Company), useValue: companyRepository },
         {
           provide: getRepositoryToken(CompanyUser),
@@ -133,14 +141,9 @@ describe('AuthService', () => {
           useValue: companyCategoryMappingRepository,
         },
         {
-          provide: getRepositoryToken(UserProductAccessGroup),
-          useValue: userProductAccessGroupRepository,
+          provide: getRepositoryToken(UserAccessGroup),
+          useValue: userAccessGroupRepository,
         },
-        {
-          provide: getRepositoryToken(CompanyProduct),
-          useValue: companyProductRepository,
-        },
-        { provide: getRepositoryToken(CompanyTwin), useValue: {} },
         { provide: KeycloakService, useValue: keycloakService },
       ],
     }).compile();
@@ -241,24 +244,19 @@ describe('AuthService', () => {
         service.logIn({
           email: 'user@example.com',
           password: 'wrong-password',
-          product_name: 'DPP Creator',
         } as any),
       ).rejects.toThrow(HttpException);
     });
 
     it('calls KeycloakService.passwordGrant exactly once per login', async () => {
-      companyProductRepository.findOne.mockResolvedValue({
-        product_ifric_id: 'urn:product:widget',
+      userAccessGroupRepository.findOne.mockResolvedValue({
+        access_group_id: 'ag-1',
       });
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-1' },
-      ]);
       accessGroupRepository.findOne.mockResolvedValue({ group_name: 'admin' });
 
       await service.logIn({
         email: 'user@example.com',
         password: 'correct-password',
-        product_name: 'urn:product:widget',
       } as any);
 
       expect(keycloakService.passwordGrant).toHaveBeenCalledTimes(1);
@@ -268,29 +266,19 @@ describe('AuthService', () => {
       );
     });
 
-    it('generic path: resolves product_ifric_id directly, no local catalog lookup, and returns the Keycloak tokens', async () => {
-      companyProductRepository.findOne.mockResolvedValue({
-        product_ifric_id: 'urn:product:widget',
+    it("resolves the user's one AccessGroup grant and returns the Keycloak tokens", async () => {
+      userAccessGroupRepository.findOne.mockResolvedValue({
+        access_group_id: 'ag-1',
       });
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-1' },
-      ]);
       accessGroupRepository.findOne.mockResolvedValue({ group_name: 'admin' });
 
       const result = await service.logIn({
         email: 'user@example.com',
         password: 'correct-password',
-        product_name: 'urn:product:widget',
       } as any);
 
-      expect(companyProductRepository.findOne).toHaveBeenCalledWith({
-        where: {
-          company_id: 'company-1',
-          product_ifric_id: 'urn:product:widget',
-        },
-      });
-      expect(userProductAccessGroupRepository.find).toHaveBeenCalledWith({
-        where: { user_id: 'user-1', product_ifric_id: 'urn:product:widget' },
+      expect(userAccessGroupRepository.findOne).toHaveBeenCalledWith({
+        where: { user_id: 'user-1' },
       });
       expect(result.status).toBe(200);
       expect(result.data.access_group).toEqual({ group_name: 'admin' });
@@ -298,74 +286,13 @@ describe('AuthService', () => {
       expect(result.data.refresh_token).toBe('kc-refresh-token');
     });
 
-    it('generic path: throws 404 when the product is not tagged to the company', async () => {
-      companyProductRepository.findOne.mockResolvedValue(null);
+    it('throws 404 when the user has no AccessGroup grant yet', async () => {
+      userAccessGroupRepository.findOne.mockResolvedValue(null);
 
       await expect(
         service.logIn({
           email: 'user@example.com',
           password: 'correct-password',
-          product_name: 'urn:product:unknown',
-        } as any),
-      ).rejects.toThrow(HttpException);
-    });
-
-    it('DPP Creator path: grants both DPP and IFRIC Dashboard access when both are tagged', async () => {
-      companyProductRepository.findOne.mockImplementation(({ where }) =>
-        Promise.resolve({ product_ifric_id: where.product_ifric_id }),
-      );
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-1' },
-      ]);
-      accessGroupRepository.findOne.mockResolvedValue({ group_name: 'admin' });
-
-      const result = await service.logIn({
-        email: 'user@example.com',
-        password: 'correct-password',
-        product_name: 'DPP Creator',
-      } as any);
-
-      expect(companyProductRepository.findOne).toHaveBeenCalledWith({
-        where: { company_id: 'company-1', product_ifric_id: 'DPP Creator' },
-      });
-      expect(companyProductRepository.findOne).toHaveBeenCalledWith({
-        where: { company_id: 'company-1', product_ifric_id: 'IFRIC Dashboard' },
-      });
-      expect(result.data.access_group_DPP).toBeDefined();
-      expect(result.data.access_group_Ifric_Dashboard).toBeDefined();
-    });
-
-    it('DPP Creator path: does not crash when IFRIC Dashboard is not tagged (null-guard regression)', async () => {
-      companyProductRepository.findOne.mockImplementation(({ where }) =>
-        Promise.resolve(
-          where.product_ifric_id === 'DPP Creator'
-            ? { product_ifric_id: where.product_ifric_id }
-            : null,
-        ),
-      );
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-1' },
-      ]);
-      accessGroupRepository.findOne.mockResolvedValue({ group_name: 'admin' });
-
-      const result = await service.logIn({
-        email: 'user@example.com',
-        password: 'correct-password',
-        product_name: 'DPP Creator',
-      } as any);
-
-      expect(result.data.access_group_DPP).toBeDefined();
-      expect(result.data.access_group_Ifric_Dashboard).toBeNull();
-    });
-
-    it('DPP Creator path: throws 404 when DPP Creator itself is not tagged', async () => {
-      companyProductRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.logIn({
-          email: 'user@example.com',
-          password: 'correct-password',
-          product_name: 'DPP Creator',
         } as any),
       ).rejects.toThrow(HttpException);
     });
@@ -391,35 +318,15 @@ describe('AuthService', () => {
       });
     });
 
-    it('DPP Creator path: does not crash when neither product is tagged, falls through to generic path', async () => {
-      companyProductRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.getIndexedData({
-          email: 'user@example.com',
-          company_id: 'company-1',
-          product_name: 'DPP Creator',
-        } as any),
-      ).rejects.toThrow(HttpException);
-
-      expect(companyProductRepository.findOne).toHaveBeenCalledWith({
-        where: { company_id: 'company-1', product_ifric_id: 'DPP Creator' },
+    it('resolves the AccessGroup grant and does not mint tokens', async () => {
+      userAccessGroupRepository.findOne.mockResolvedValue({
+        access_group_id: 'ag-1',
       });
-    });
-
-    it('generic path: resolves product_ifric_id directly and does not mint tokens', async () => {
-      companyProductRepository.findOne.mockResolvedValue({
-        product_ifric_id: 'urn:product:widget',
-      });
-      userProductAccessGroupRepository.find.mockResolvedValue([
-        { access_group_id: 'ag-1' },
-      ]);
       accessGroupRepository.findOne.mockResolvedValue({ group_name: 'admin' });
 
       const result = await service.getIndexedData({
         email: 'user@example.com',
         company_id: 'company-1',
-        product_name: 'urn:product:widget',
       } as any);
 
       expect(result.status).toBe(200);
@@ -427,30 +334,116 @@ describe('AuthService', () => {
       expect((result.data as any).refresh_token).toBeUndefined();
       expect(keycloakService.passwordGrant).not.toHaveBeenCalled();
     });
+
+    it('throws 404 when the user has no AccessGroup grant yet', async () => {
+      userAccessGroupRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getIndexedData({
+          email: 'user@example.com',
+          company_id: 'company-1',
+        } as any),
+      ).rejects.toThrow(HttpException);
+    });
   });
 
   describe('createCompanyUser', () => {
-    it('provisions the user in Keycloak instead of hashing a local password', async () => {
-      companyUserRepository.find.mockResolvedValue([]); // no existing user
+    it('rejects (without touching Keycloak) when the caller is scoped to a different company', async () => {
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new Error('company mismatch');
+      });
+
+      await expect(
+        service.createCompanyUser(
+          {
+            user_email: 'newuser@example.com',
+            user_name: 'New User',
+            company_ifric_id: 'urn:ifric:company-1',
+            user_role: 'admin',
+          } as any,
+          'admin@example.com',
+          { company_ifric_id: 'urn:ifric:other-company', user_id: 'caller-1' },
+        ),
+      ).rejects.toThrow('company mismatch');
+      expect(keycloakService.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the caller lacks create permission', async () => {
+      accessControlService.assertPermission.mockRejectedValue(
+        new Error('no create permission'),
+      );
+
+      await expect(
+        service.createCompanyUser(
+          {
+            user_email: 'newuser@example.com',
+            user_name: 'New User',
+            company_ifric_id: 'urn:ifric:company-1',
+            user_role: 'admin',
+          } as any,
+          'admin@example.com',
+          { company_ifric_id: 'urn:ifric:company-1', user_id: 'caller-1' },
+        ),
+      ).rejects.toThrow('no create permission');
+      expect(keycloakService.createUser).not.toHaveBeenCalled();
+    });
+
+    it("sources meta_data.add_by from the caller's verified token email, not the unverified admin_mail param", async () => {
+      companyUserRepository.find.mockResolvedValue([]);
       companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
       companyUserRepository.save.mockResolvedValue({ _id: 'new-user-1' });
-      accessGroupRepository.find.mockResolvedValue([{ _id: 'ag-1' }]);
-      userProductAccessGroupRepository.save.mockResolvedValue({});
+      accessGroupRepository.find.mockResolvedValue([]);
 
       await service.createCompanyUser(
         {
           user_email: 'newuser@example.com',
           user_name: 'New User',
           company_ifric_id: 'urn:ifric:company-1',
-          products: [{ product: 'urn:product:widget', user_role: 'admin' }],
+          user_role: 'admin',
+        } as any,
+        'spoofed-admin@example.com',
+        {
+          company_ifric_id: 'urn:ifric:company-1',
+          user_id: 'caller-1',
+          email: 'real-caller@example.com',
+        },
+      );
+
+      expect(companyUserRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meta_data: expect.objectContaining({
+            add_by: 'real-caller@example.com',
+          }),
+        }),
+      );
+    });
+
+    it('provisions the user in Keycloak instead of hashing a local password', async () => {
+      companyUserRepository.find.mockResolvedValue([]); // no existing user
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      companyUserRepository.save.mockResolvedValue({ _id: 'new-user-1' });
+      accessGroupRepository.find.mockResolvedValue([{ _id: 'ag-1' }]);
+      userAccessGroupRepository.save.mockResolvedValue({});
+
+      await service.createCompanyUser(
+        {
+          user_email: 'newuser@example.com',
+          user_name: 'New User',
+          company_ifric_id: 'urn:ifric:company-1',
+          user_role: 'admin',
         } as any,
         'admin@example.com',
+        { company_ifric_id: 'urn:ifric:company-1', user_id: 'caller-1' },
       );
 
       expect(keycloakService.createUser).toHaveBeenCalledWith(
         'newuser@example.com',
         'New User',
         expect.any(String),
+        {
+          company_ifric_id: 'urn:ifric:company-1',
+          user_id: expect.any(String),
+        },
       );
       expect(companyUserRepository.create).toHaveBeenCalledWith(
         expect.not.objectContaining({
@@ -458,13 +451,12 @@ describe('AuthService', () => {
           jwt_token: expect.anything(),
         }),
       );
-      expect(userProductAccessGroupRepository.create).toHaveBeenCalledWith(
+      expect(userAccessGroupRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          product_ifric_id: 'urn:product:widget',
           access_group_id: 'ag-1',
         }),
       );
-      expect(userProductAccessGroupRepository.save).toHaveBeenCalled();
+      expect(userAccessGroupRepository.save).toHaveBeenCalled();
     });
   });
 
@@ -582,39 +574,20 @@ describe('AuthService', () => {
   });
 
   describe('updateUserAccessGroup', () => {
-    it('upserts UserProductAccessGroup keyed on product_ifric_id, no catalog lookup', async () => {
+    it('upserts UserAccessGroup keyed on user_id alone', async () => {
       companyUserRepository.findOne.mockResolvedValue({
         _id: 'user-1',
         company_id: 'company-1',
       });
       accessGroupRepository.find.mockResolvedValue([{ _id: 'ag-1' }]);
-      userProductAccessGroupRepository.query.mockResolvedValue({});
+      userAccessGroupRepository.query.mockResolvedValue({});
 
-      await service.updateUserAccessGroup('user-1', [
-        { product: 'urn:product:widget', user_role: 'admin' },
-      ] as any);
+      await service.updateUserAccessGroup('user-1', { user_role: 'admin' });
 
-      expect(userProductAccessGroupRepository.query).toHaveBeenCalledWith(
+      expect(userAccessGroupRepository.query).toHaveBeenCalledWith(
         expect.stringContaining('ON CONFLICT'),
-        [expect.any(String), 'user-1', 'urn:product:widget', 'ag-1'],
+        [expect.any(String), 'user-1', 'ag-1'],
       );
-    });
-  });
-
-  describe('getUserSpecificProductAccess', () => {
-    it('filters UserProductAccessGroup directly by product_ifric_id, no catalog lookup', async () => {
-      const rows = [{ product_ifric_id: 'urn:product:widget' }];
-      userProductAccessGroupRepository.find.mockResolvedValue(rows);
-
-      const result = await service.getUserSpecificProductAccess(
-        'urn:product:widget',
-        'user-1',
-      );
-
-      expect(userProductAccessGroupRepository.find).toHaveBeenCalledWith({
-        where: { product_ifric_id: 'urn:product:widget', user_id: 'user-1' },
-      });
-      expect(result).toBe(rows);
     });
   });
 });
