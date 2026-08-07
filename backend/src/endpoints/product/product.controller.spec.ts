@@ -19,6 +19,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ProductController } from './product.controller';
 import { ProductService } from './product.service';
 import { Product } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
 import { KeycloakService } from '../auth/keycloak.service';
 
 describe('ProductController', () => {
@@ -30,7 +31,10 @@ describe('ProductController', () => {
       providers: [
         ProductService,
         { provide: getRepositoryToken(Product), useValue: {} },
+        // Satisfies AuthGuard's dependencies — both come from @Global()
+        // modules in the real app, which a bare TestingModule doesn't pull in.
         { provide: KeycloakService, useValue: {} },
+        { provide: AccessControlService, useValue: {} },
       ],
     }).compile();
 

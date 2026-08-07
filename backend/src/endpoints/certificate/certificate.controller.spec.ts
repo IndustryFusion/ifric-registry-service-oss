@@ -16,6 +16,7 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { AccessControlService } from 'src/common/access-control.service';
 import { KeycloakService } from '../auth/keycloak.service';
 import { CertificateController } from './certificate.controller';
 import { CertificateService } from './certificate.service';
@@ -34,7 +35,10 @@ describe('CertificateController', () => {
         { provide: getRepositoryToken(Certificate), useValue: {} },
         // Satisfies AuthGuard's dependencies (applied via @UseGuards on
         // this controller's routes, so its own deps must resolve too).
+        // Both come from @Global() modules in the real app, which a bare
+        // TestingModule doesn't pull in.
         { provide: KeycloakService, useValue: {} },
+        { provide: AccessControlService, useValue: {} },
       ],
     }).compile();
 

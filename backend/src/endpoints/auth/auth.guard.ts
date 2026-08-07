@@ -21,6 +21,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { AccessControlService } from '../../common/access-control.service';
 import { KeycloakService } from './keycloak.service';
 
 /**
@@ -28,10 +29,22 @@ import { KeycloakService } from './keycloak.service';
  * cached — see KeycloakService.verifyAccessToken), Keycloak being this
  * app's sole identity provider. On success, attaches the decoded payload to
  * `request.user`.
+ *
+ * The realm hosts more than one client, and they issue different claim
+ * sets — so the payload is normalized here, at the one point every guarded
+ * request passes through, rather than at the ~30 places that consume it.
+ * Everything downstream sees a single shape.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private keycloakService: KeycloakService) {}
+  // AccessControlService comes from @Global() AccessControlModule, the same
+  // way KeycloakService comes from @Global() KeycloakModule — CertificateModule
+  // uses a bare @UseGuards(AuthGuard) without importing either, so any
+  // dependency added here has to be globally resolvable.
+  constructor(
+    private keycloakService: KeycloakService,
+    private accessControlService: AccessControlService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -41,7 +54,7 @@ export class AuthGuard implements CanActivate {
     }
 
     const payload = await this.keycloakService.verifyAccessToken(token);
-    request['user'] = payload;
+    request['user'] = await this.accessControlService.resolveClaims(payload);
     return true;
   }
 

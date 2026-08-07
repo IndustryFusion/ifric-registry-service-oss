@@ -16,7 +16,7 @@
 
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AccessGroup, UserAccessGroup } from 'src/entities';
+import { AccessGroup, Company, UserAccessGroup } from 'src/entities';
 import { AccessControlService } from './access-control.service';
 
 // @Global() so AccessControlService resolves for every module without each
@@ -25,7 +25,7 @@ import { AccessControlService } from './access-control.service';
 // ProductModule, and AuthModule alike.
 @Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([AccessGroup, UserAccessGroup])],
+  imports: [TypeOrmModule.forFeature([AccessGroup, UserAccessGroup, Company])],
   providers: [AccessControlService],
   exports: [AccessControlService],
 })

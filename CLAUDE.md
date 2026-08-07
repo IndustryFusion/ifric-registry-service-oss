@@ -167,16 +167,15 @@ themselves; every credential operation goes through `KeycloakService`
 (`backend/src/endpoints/auth/keycloak.service.ts`):
 
 - **`POST /auth/login`** — same external contract as before
-  (`{email, password, product_name}` in, `access_token`/`refresh_token` +
+  (`{email, password}` in, `access_token`/`refresh_token` +
   company/access-group data out), but the password check is a Resource
   Owner Password Credentials (ROPC) grant against Keycloak's confidential
   `ifric` client (`KeycloakService.passwordGrant`), called exactly once per
   login and reused across whichever response branch fires — don't
   reintroduce a second call, it would open a redundant Keycloak session.
-  The rest of `logIn`'s Company/CompanyCategoryMapping/CompanyProduct/
-  UserProductAccessGroup/AccessGroup resolution walk (including the
-  `'DPP Creator'` special case) is unchanged and has nothing to do with
-  authentication.
+  The rest of `logIn`'s Company/CompanyUser/CompanyCategoryMapping/
+  CompanyCategory/UserAccessGroup/AccessGroup resolution walk is unchanged
+  and has nothing to do with authentication.
 - **`POST /auth/refresh`** — forwards to Keycloak's `refresh_token` grant.
   Keycloak rotates refresh tokens by default, so the response includes a
   new `refresh_token` (additive vs. the old `{access_token}`-only shape).
@@ -186,7 +185,28 @@ themselves; every credential operation goes through `KeycloakService`
 - **`AuthGuard`** — verifies the bearer token locally against Keycloak's
   realm signing keys (JWKS, fetched via `jwks-rsa` and cached — no
   per-request network round trip to Keycloak in the steady state), not via
-  Keycloak's token-introspection endpoint.
+  Keycloak's token-introspection endpoint. It then calls
+  `AccessControlService.resolveClaims` and puts the *resolved* claims on
+  `request.user` — see the dataspace note below. Signature and realm
+  issuer are the only things checked; `azp`/`aud` deliberately are not, so
+  any client in the realm authenticates here.
+- **Dataspace (`data-space` client) tokens** — a third client in the same
+  realm, owned by another team, issues tokens carrying `participant_id`
+  instead of `company_ifric_id`/`user_id`. A company onboarded from IFRIC
+  has its `participant_id` set to a verbatim copy of its
+  `company_ifric_id`, so `resolveClaims` matches the claim against
+  `Company` and aliases it into the `company_ifric_id` slot — there is no
+  mapping table and no column, and adding one would mean the copy
+  invariant broke. Normalization happens **once, in `AuthGuard`**: nothing
+  downstream (the ~30 `assertCompanyMatch`/`assertPermission` call sites,
+  `@AuthUser()`, any controller) knows two token formats exist, and a
+  change that teaches a call site about `participant_id` means that
+  boundary has been breached. `assertPermission` is skipped for a resolved
+  participant — `participant_id` names a company and `UserAccessGroup` is
+  keyed on a user, so there is no role to look up; `assertCompanyMatch`
+  still confines it to that one company. Full details, including which
+  `AssetService` methods this leaves unguarded, are in
+  `docs/keycloak-setup.md`.
 - **User/credential lifecycle** (`create-user/:admin_mail`,
   `update-password`, `recover-password[-request]`, `delete-company-user`,
   and `CompanyService.createCompany`'s admin-user provisioning) all call
@@ -284,18 +304,20 @@ to its manufacturer company, its owner company, and optionally a `Factory`;
 `Factory` is a physical location tagged to an owner company via
 `owner_company_ifric_id` (full CRUD lives on `CompanyController`);
 `CompanyAsset`/`CompanyGateWay`/`CompanyServer` are company-owned
-physical/IoT resources; `AccessGroup` + `UserProductAccessGroup` implement
-per-company CRUD-permission RBAC — `UserProductAccessGroup.product_ifric_id`
-is also a plain string, not a Product-catalog reference:
-`AuthService.logIn`/`getIndexedData` resolve module access directly off it
-rather than through a catalog lookup; `CompanyCategory` +
+physical/IoT resources; `AccessGroup` + `UserAccessGroup` implement
+per-company CRUD-permission RBAC — **one role per user**, since
+`UserAccessGroup` is `@Unique(['user_id'])` and carries no product
+dimension at all (the older per-product `UserProductAccessGroup` is gone —
+don't reintroduce it). `AccessControlService` re-derives the
+create/read/update/delete decision from those two tables on every request
+rather than caching it in the token, so a role change takes effect on the
+user's next request with no revocation needed; `CompanyCategory` +
 `CompanyCategoryMapping` implement the company taxonomy seeded by
 `ScriptService`. `CompanyService.createCompany` runs as a single TypeORM
 `QueryRunner` transaction spanning `Company`, `CompanyCategoryMapping`,
-`CompanyProduct`, `AccessGroup`, `CompanyUser`, and
-`UserProductAccessGroup` — the ICID mint call happens outside the DB
-transaction (external, not rollback-able by SQL) and keeps its own manual
-compensating `DELETE` on failure.
+`AccessGroup`, `CompanyUser`, and `UserAccessGroup` — the ICID mint call
+happens outside the DB transaction (external, not rollback-able by SQL)
+and keeps its own manual compensating `DELETE` on failure.
 
 ### API docs
 

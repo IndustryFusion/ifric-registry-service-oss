@@ -24,8 +24,22 @@
 export interface AuthTokenClaims {
   company_ifric_id?: string;
   user_id?: string;
+  // Projected by the separate "data-space" client's own mapper, not ours.
+  // For a company onboarded into the dataspace from IFRIC, this is a
+  // verbatim copy of its company_ifric_id — see
+  // AccessControlService.resolveClaims. Participants that originated
+  // outside IFRIC carry an id from the dataspace's own registry, which
+  // matches no company here.
+  participant_id?: string;
   sub?: string;
   email?: string;
   preferred_username?: string;
   [claim: string]: unknown;
 }
+
+// Not a Keycloak claim: set only by AccessControlService.resolveClaims once
+// a participant_id has actually been matched against a Company row, and
+// stripped from incoming payloads before that check so it can never be
+// asserted by a token. Kept out of AuthTokenClaims' named fields so no
+// caller mistakes it for something the identity provider vouched for.
+export const PARTICIPANT_VERIFIED = 'participant_verified';

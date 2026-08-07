@@ -9,9 +9,32 @@ doc is the shared source for that setup — linked from the root README's
 [Kubernetes Deployment](../README.md#kubernetes-deployment) sections, and
 from [`charts/ifric-registry-service/README.md`](../charts/ifric-registry-service/README.md).
 
+> **On Kubernetes this is automated.** The Helm chart's
+> `keycloak.bootstrap.enabled` (default on) runs a Job that creates
+> everything below, including the two realm settings in step 1 that are
+> easy to miss by hand. Read this doc when you're on Compose, when the
+> Keycloak belongs to another team, or when you want to know what that Job
+> actually does. See
+> [`charts/ifric-registry-service/README.md`](../charts/ifric-registry-service/README.md#keycloak-setup).
+
 You need to create, in the target realm:
 
-1. A realm (e.g. `ifric`) — any deployment gets its own.
+1. A realm (e.g. `ifric`) — any deployment gets its own. Two of its
+   defaults must be changed, or the setup below will look correct and still
+   not work (both verified against Keycloak 26):
+   - **Realm settings → General → Unmanaged attributes: `Enabled`.**
+     Keycloak 24+ uses declarative user profiles, and unknown attributes
+     are discarded by default. The Admin API still answers `201` when this
+     app stores `company_ifric_id`/`user_id` — they just aren't there
+     afterwards, the mappers in step 4 then project nothing, and every
+     company-scoped endpoint returns 403 on a token that looks perfectly
+     valid.
+   - **Authentication → Required actions → `Verify Profile`: off.** It
+     requires both a first and a last name; this app collects a single
+     name and sets only `firstName`, so every user it creates would be
+     stuck at `Account is not fully set up` and the password grant would
+     fail with `invalid_grant`. Logins here are ROPC, so there is no
+     browser flow in which a user could ever complete the profile.
 2. A **confidential** client `ifric` with **Direct Access Grants** enabled
    — this is what end users authenticate against (`POST /auth/login`, a
    Resource Owner Password Credentials grant).
@@ -85,6 +108,59 @@ Affected users need to log in again (or refresh) afterward to get a token
 carrying the new claims — an already-issued token doesn't retroactively
 gain them.
 
+## Dataspace participants (the `data-space` client)
+
+A separate application — the dataspace — runs its own **confidential client
+in this same realm**, configured by that team, not by this setup. Its
+tokens carry a `participant_id` claim and its own RBAC runs entirely off
+that claim; it needs nothing from this service. Do not create or manage
+that client here.
+
+Two properties make its tokens usable against this service:
+
+- **Same realm means same signing keys.** `verifyAccessToken` checks the
+  signature and the realm issuer, not `azp`/`aud`, so a dataspace token
+  authenticates here already. Only authorization ever distinguished them.
+- **`participant_id` is a copy of `company_ifric_id`.** When a company
+  onboarded from IFRIC registers in the dataspace, its `participant_id` is
+  set to that company's `company_ifric_id` verbatim. Nothing has to be
+  mapped or kept in sync — matching the claim against `Company` *is* the
+  resolution, which is why this feature adds no table and no column.
+
+So a request is authorized if it carries **either** claim set:
+
+| Token from | Claims | How it authorizes |
+| --- | --- | --- |
+| `ifric` | `company_ifric_id` + `user_id` | unchanged: company match, then role check |
+| `data-space` | `participant_id` | matched against `Company`, aliased into `company_ifric_id`, **role check skipped** |
+
+`AccessControlService.resolveClaims` does that normalization once, in
+`AuthGuard`, so nothing downstream knows which client issued the token.
+
+Participants that did **not** come from IFRIC carry ids from the
+dataspace's own registry, which match no company here. They need no
+special handling: the claim stays unresolved and the existing
+"missing claim is a hard denial" rule rejects them.
+
+Two consequences worth knowing:
+
+- **The role check is skipped for participant tokens**, because a
+  `participant_id` names a company and `UserAccessGroup` is keyed on a
+  user — there is no person to look up. A participant therefore gets full
+  create/read/update/delete **within its own company**, regardless of any
+  role its people hold on the IFRIC side. The tenant boundary still holds:
+  the alias means `assertCompanyMatch` confines it to that one company.
+- **The exception is the handful of `AssetService` methods keyed by asset
+  id rather than company id** (`deleteAssets`, `getAssetByAssetIfricId`,
+  `getAssetManufacturer`, `getAssetOwner`, `getAssetFactoryLocation`,
+  `getManufacturerOwnerAssets`). These call `assertPermission` as their
+  only guard, so with the role check skipped there is nothing scoping them
+  for a participant token.
+- **Whoever assigns `participant_id` can name a company here.** This is
+  safe only while ids issued to non-IFRIC participants can never equal a
+  real `company_ifric_id` — i.e. they come from a different namespace than
+  ICID's urns.
+
 ## RBAC architecture
 
 How company/user scoping and permission checks actually work end to end —
@@ -118,18 +194,20 @@ flowchart TB
     subgraph R["3 · Every guarded request"]
         direction TB
         REQ["Incoming request<br/>Authorization: Bearer &lt;token&gt;"]
-        AG1["AuthGuard<br/>verifies signature via JWKS,<br/>sets request.user = decoded claims"]
+        AG1["AuthGuard<br/>verifies signature via JWKS"]
+        NRM["AccessControlService.resolveClaims<br/>ifric claims → passed through<br/>participant_id → matched against Company,<br/>aliased into company_ifric_id"]
         DEC["@AuthUser() decorator<br/>hands claims to the controller"]
         ACM["AccessControlService.assertCompanyMatch<br/>(claims.company_ifric_id === target company?)"]
         APM["AccessControlService.assertPermission<br/>(claims.user_id's UserAccessGroup →<br/>AccessGroup flag for this action?)"]
         ALLOW["Handler runs"]
         DENY["403 Forbidden"]
 
-        REQ --> AG1 --> DEC --> ACM
+        REQ --> AG1 --> NRM --> DEC --> ACM
         ACM -- match --> APM
         ACM -- mismatch --> DENY
         APM -- flag true --> ALLOW
         APM -- flag false/missing --> DENY
+        APM -. participant: no user to check,<br/>role check skipped .-> ALLOW
     end
 
     KC1 -. attributes stored on .-> ROPC
@@ -152,4 +230,12 @@ A few things worth noting from this picture:
   revocation needed.
 - **A missing `company_ifric_id`/`user_id` claim is a hard failure**, not
   an implicit bypass — see [Backfilling existing users](#backfilling-existing-users)
-  above for the one case this happens (pre-migration accounts).
+  above for the one case this happens (pre-migration accounts). The single
+  deliberate exception is a `participant_id` that resolved to a real
+  `Company`, which skips the role check only — see
+  [Dataspace participants](#dataspace-participants-the-data-space-client).
+- **`resolveClaims` runs in `AuthGuard`, not at the call sites.** That is
+  what keeps the two token formats from leaking into ~30 authorization
+  checks: normalize once at the boundary, and everything downstream sees a
+  single shape. A change that makes a call site aware of `participant_id`
+  is a sign the boundary has been breached.

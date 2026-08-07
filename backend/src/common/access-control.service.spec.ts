@@ -21,13 +21,16 @@ describe('AccessControlService', () => {
   let service: AccessControlService;
   let accessGroupRepository: { findOne: jest.Mock };
   let userAccessGroupRepository: { findOne: jest.Mock };
+  let companyRepository: { findOne: jest.Mock };
 
   beforeEach(() => {
     accessGroupRepository = { findOne: jest.fn() };
     userAccessGroupRepository = { findOne: jest.fn() };
+    companyRepository = { findOne: jest.fn() };
     service = new AccessControlService(
       accessGroupRepository as any,
       userAccessGroupRepository as any,
+      companyRepository as any,
     );
   });
 
@@ -111,6 +114,111 @@ describe('AccessControlService', () => {
         service.assertPermission({ user_id: 'user-1' }, 'read'),
       ).rejects.toThrow(ForbiddenException);
       expect(accessGroupRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('skips the role lookup entirely for a verified participant', async () => {
+      await expect(
+        service.assertPermission(
+          {
+            company_ifric_id: 'urn:ifric:company-a',
+            participant_verified: true,
+          },
+          'delete',
+        ),
+      ).resolves.toBeUndefined();
+      expect(userAccessGroupRepository.findOne).not.toHaveBeenCalled();
+      expect(accessGroupRepository.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveClaims', () => {
+    it('returns an ifric token untouched and without querying', async () => {
+      const claims = {
+        company_ifric_id: 'urn:ifric:company-a',
+        user_id: 'user-1',
+      };
+
+      await expect(service.resolveClaims(claims)).resolves.toEqual(claims);
+      expect(companyRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('aliases a participant_id that matches a company into company_ifric_id', async () => {
+      companyRepository.findOne.mockResolvedValue({
+        company_ifric_id: 'urn:ifric:company-a',
+      });
+
+      await expect(
+        service.resolveClaims({ participant_id: 'urn:ifric:company-a' }),
+      ).resolves.toEqual({
+        participant_id: 'urn:ifric:company-a',
+        company_ifric_id: 'urn:ifric:company-a',
+        participant_verified: true,
+      });
+      expect(companyRepository.findOne).toHaveBeenCalledWith({
+        where: { company_ifric_id: 'urn:ifric:company-a' },
+      });
+    });
+
+    it('leaves a participant from the dataspace’s own registry unresolved, so the existing checks deny it', async () => {
+      companyRepository.findOne.mockResolvedValue(null);
+
+      const resolved = await service.resolveClaims({
+        participant_id: 'dataspace-only-participant',
+      });
+
+      expect(resolved.company_ifric_id).toBeUndefined();
+      expect(resolved.participant_verified).toBeUndefined();
+      expect(() =>
+        service.assertCompanyMatch(resolved, 'urn:ifric:company-a'),
+      ).toThrow(ForbiddenException);
+    });
+
+    it('never trusts participant_verified arriving on the token itself', async () => {
+      companyRepository.findOne.mockResolvedValue(null);
+
+      const resolved = await service.resolveClaims({
+        participant_id: 'dataspace-only-participant',
+        participant_verified: true,
+      });
+
+      expect(resolved.participant_verified).toBeUndefined();
+      await expect(
+        service.assertPermission(resolved, 'delete'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('does not let a contradictory participant_id overwrite an existing company_ifric_id', async () => {
+      await expect(
+        service.resolveClaims({
+          company_ifric_id: 'urn:ifric:company-a',
+          participant_id: 'urn:ifric:company-b',
+        }),
+      ).resolves.toMatchObject({ company_ifric_id: 'urn:ifric:company-a' });
+      expect(companyRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('confines a resolved participant to its own company', async () => {
+      companyRepository.findOne.mockResolvedValue({
+        company_ifric_id: 'urn:ifric:company-a',
+      });
+
+      const resolved = await service.resolveClaims({
+        participant_id: 'urn:ifric:company-a',
+      });
+
+      expect(() =>
+        service.assertCompanyMatch(resolved, 'urn:ifric:company-a'),
+      ).not.toThrow();
+      expect(() =>
+        service.assertCompanyMatch(resolved, 'urn:ifric:company-b'),
+      ).toThrow(ForbiddenException);
+    });
+
+    it('leaves a token carrying neither claim exactly as it was', async () => {
+      await expect(
+        service.resolveClaims({ sub: 'kc-user-1' }),
+      ).resolves.toEqual({ sub: 'kc-user-1' });
+      expect(companyRepository.findOne).not.toHaveBeenCalled();
     });
   });
 });

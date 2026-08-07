@@ -15,16 +15,26 @@
 //
 
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { AccessControlService } from '../../common/access-control.service';
 import { AuthGuard } from './auth.guard';
 import { KeycloakService } from './keycloak.service';
 
 describe('AuthGuard', () => {
   let guard: AuthGuard;
   let keycloakService: { verifyAccessToken: jest.Mock };
+  let accessControlService: { resolveClaims: jest.Mock };
 
   beforeEach(() => {
     keycloakService = { verifyAccessToken: jest.fn() };
-    guard = new AuthGuard(keycloakService as unknown as KeycloakService);
+    // Default to a pass-through so the pre-existing cases below still
+    // assert what they always did; the participant case overrides it.
+    accessControlService = {
+      resolveClaims: jest.fn(async (claims) => claims),
+    };
+    guard = new AuthGuard(
+      keycloakService as unknown as KeycloakService,
+      accessControlService as unknown as AccessControlService,
+    );
   });
 
   function contextWithAuthHeader(header?: string): ExecutionContext {
@@ -67,5 +77,24 @@ describe('AuthGuard', () => {
       'a-valid-token',
     );
     expect(request.user).toEqual(payload);
+  });
+
+  it('attaches the resolved claims, not the raw payload, so a dataspace token arrives normalized', async () => {
+    const payload = { sub: 'kc-user-1', participant_id: 'urn:ifric:company-a' };
+    const resolved = {
+      ...payload,
+      company_ifric_id: 'urn:ifric:company-a',
+      participant_verified: true,
+    };
+    keycloakService.verifyAccessToken.mockResolvedValue(payload);
+    accessControlService.resolveClaims.mockResolvedValue(resolved);
+    const request: any = { headers: { authorization: 'Bearer a-valid-token' } };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as ExecutionContext;
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(accessControlService.resolveClaims).toHaveBeenCalledWith(payload);
+    expect(request.user).toEqual(resolved);
   });
 });
