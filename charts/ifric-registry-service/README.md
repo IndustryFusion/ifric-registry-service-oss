@@ -138,8 +138,9 @@ helm install my-registry charts/ifric-registry-service \
      initContainer migrate  → npm run migration:run
 4. post-install hook, weight 0  → keycloak-bootstrap Job
      realm, user profile, ifric + ifric-admin clients, mappers, role grant
-5. post-install hook, weight 10 → seed Job
-     waits for the backend, then POST /script
+5. post-install hook, weight 10 → seed Jobs
+     backend seed → waits for the backend, then POST /script
+     icid seed    → waits for ICID, then POST /script   (if bundled)
 ```
 
 The backend may log Keycloak errors between steps 3 and 4 — the clients do
@@ -256,26 +257,38 @@ endpoints a participant token can reach, is in
 
 ## Seed data
 
-`seed.enabled=true` (default) POSTs `/script` once the backend answers,
-creating the default access groups (`admin`, `read_only`, ...), the
-company-category taxonomy and example products. **A fresh database has no
-access groups at all**, so without this `createCompany` has no `admin`
-group to assign and every permission check fails.
+`seed.enabled=true` (default) runs **two** Jobs, because the two services
+keep separate taxonomies in separate datastores. Both are automatic.
 
-It is a **`post-install` hook only**. `/script` is not idempotent — it
-inserts unconditionally — so running it on every upgrade would duplicate
-every group and category. If the backend isn't reachable in time
-(`seed.waitTimeoutSeconds`, default 300) the Job says so and exits
-*without* failing the release; seed by hand afterwards:
+| | Seeds | Hook | Why it matters |
+|---|---|---|---|
+| backend seed | access groups (`admin`, `read_only`, ...), company categories, example products | `post-install` **only** | A fresh database has no access groups at all, so `createCompany` has no `admin` group to assign and every permission check fails |
+| ICID seed (`icid.enabled` only) | dataspace, regions, countries, object types and sub-types | `post-install`, `post-upgrade` | `env.companyDefaultCode` (`IFX-COM-NAP`) is split and sent to ICID on every company creation; ICID rejects codes it hasn't been seeded with, so an unseeded ICID means company creation fails at call time |
+
+The differing hooks are not an oversight — they follow the two endpoints'
+actual behaviour:
+
+- **The backend's `/script` inserts unconditionally.** Running it on every
+  upgrade would duplicate every access group and category, so it runs once
+  per install and never again.
+- **ICID's `/script` guards every write** (`findOne` on the dataspace, an
+  `$in` query on object types, `countDocuments` on countries). Re-running
+  converges instead of duplicating — which also means enabling ICID on an
+  existing release seeds it on the next `helm upgrade`, no manual step.
+
+Only the **bundled** ICID is seeded. With `icid.enabled=false` you're
+pointing at someone else's instance, which is theirs to seed.
+
+If either target never becomes reachable within `seed.waitTimeoutSeconds`
+(default 300), that Job logs the manual command and exits *without* failing
+the release:
 
 ```bash
+# backend
 kubectl exec deploy/my-registry-ifric-registry-service-backend -- \
   node -e "fetch('http://localhost:4007/script',{method:'POST'}).then(r=>r.text()).then(console.log)"
-```
 
-With `icid.enabled=true`, ICID has its own separate taxonomy to seed:
-
-```bash
+# ICID
 kubectl port-forward svc/my-registry-ifric-registry-service-icid 4010:4010
 curl -X POST http://localhost:4010/script
 ```

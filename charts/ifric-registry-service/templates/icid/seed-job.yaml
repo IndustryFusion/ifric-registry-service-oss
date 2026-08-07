@@ -1,0 +1,103 @@
+{{- if and .Values.icid.enabled .Values.seed.enabled }}
+{{/*
+ICID keeps its own taxonomy in its own MongoDB — dataspace, regions,
+countries, object types and sub-types — entirely separate from this
+service's access groups and company categories. It is not optional
+decoration: env.companyDefaultCode (IFX-COM-NAP) is split into
+dataspace/object-type/sub-type codes and sent to ICID on every company
+creation, and ICID rejects codes it has not been seeded with. An unseeded
+ICID means POST /company/create-company fails at call time.
+
+Separate from the backend seed Job on purpose — different target, different
+readiness, and a different idempotency story:
+
+  - post-install AND post-upgrade, unlike the backend seed. ICID's create()
+    guards every write (findOne on the dataspace, an $in query on object
+    types, countDocuments on countries, findOne per sub-type), so re-running
+    converges instead of duplicating. Verified against ibn40/icid-backend's
+    own script.service.ts. That also means enabling ICID on an existing
+    release seeds it on the next upgrade rather than needing a manual step.
+  - Only when icid.enabled — that means "this chart deployed ICID". An
+    external ICID is somebody else's to seed, and we shouldn't POST into it.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-icid-seed
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: icid-seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # Alongside the backend seed (weight 10) — the two are independent, so
+    # neither should block the other.
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: icid-seed
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: icid-seed
+          # This service's image, purely for node's global fetch — same
+          # reasoning as the backend seed Job.
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: ICID_URL
+              value: {{ printf "http://%s:%v" (include "ifric-registry-service.icidHost" .) .Values.icid.service.port | quote }}
+            - name: WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.seed.waitTimeoutSeconds | quote }}
+          command:
+            - node
+            - -e
+            - |
+              const base = process.env.ICID_URL;
+              const deadline = Date.now() + Number(process.env.WAIT_TIMEOUT_SECONDS) * 1000;
+              const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+              (async () => {
+                // ICID waits on its own MongoDB and replica-set init before
+                // it listens, so this can take a while on a cold install.
+                while (Date.now() < deadline) {
+                  try {
+                    // Any answer means it's listening; GET /script is its
+                    // own read endpoint, so a 404/500 body still counts.
+                    await fetch(`${base}/script`);
+                    break;
+                  } catch {
+                    // not up yet
+                  }
+                  console.log('   waiting for icid...');
+                  await sleep(5000);
+                }
+
+                if (Date.now() >= deadline) {
+                  // Exit 0 — an unseeded ICID breaks company creation, not
+                  // the release. NOTES.txt carries the manual command.
+                  console.log('!! ICID did not become reachable before the timeout — seed skipped.');
+                  console.log('   Seed it once ICID is up:');
+                  console.log(`   kubectl port-forward svc/{{ include "ifric-registry-service.icidHost" . }} {{ .Values.icid.service.port }}:{{ .Values.icid.service.port }}`);
+                  console.log(`   curl -X POST http://localhost:{{ .Values.icid.service.port }}/script`);
+                  return;
+                }
+
+                const res = await fetch(`${base}/script`, { method: 'POST' });
+                const body = await res.text();
+                console.log(`==> POST /script -> ${res.status} ${body}`);
+                if (!res.ok) {
+                  process.exit(1);
+                }
+                console.log('==> ICID seeded: dataspace, regions, countries, object types and sub-types.');
+                console.log(`    env.companyDefaultCode is {{ .Values.env.companyDefaultCode }} — its last two segments`);
+                console.log('    must match an object-type/sub-type pair in the list above.');
+              })().catch((err) => {
+                console.error(err);
+                process.exit(1);
+              });
+{{- end }}

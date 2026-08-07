@@ -242,21 +242,30 @@ keycloak:
     # so this only covers a genuinely failed run.
     backoffLimit: 3
 
-# One-time seed Job (templates/backend/seed-job.yaml): POSTs /script once
-# the backend is reachable, creating the default RBAC access groups
-# ("admin", "read_only", ...), the company-category taxonomy, and example
-# products. Without it the database has no AccessGroup rows, so
-# createCompany has no "admin" group to assign and every permission check
-# fails.
+# Seed Jobs. Covers both datastores, which are seeded separately because
+# they belong to different services:
 #
-# post-install ONLY, deliberately: /script is not idempotent (it blindly
-# inserts, see backend/src/endpoints/script/script.service.ts), so running
-# it again on every upgrade would duplicate every access group and
-# category. If it doesn't run — backend not ready in time, say — the Job
-# says so and exits without failing the release; seed manually afterwards
-# with the curl in NOTES.txt.
+#   templates/backend/seed-job.yaml — POSTs this app's /script, creating the
+#     default RBAC access groups ("admin", "read_only", ...), the
+#     company-category taxonomy and example products. Without it there are
+#     no AccessGroup rows at all, so createCompany has no "admin" group to
+#     assign and every permission check fails. post-install ONLY: /script
+#     inserts unconditionally (see
+#     backend/src/endpoints/script/script.service.ts), so re-running it
+#     would duplicate every group and category.
+#
+#   templates/icid/seed-job.yaml — POSTs the bundled ICID's own /script,
+#     creating its dataspace/region/country/object-type taxonomy. Only when
+#     icid.enabled (an external ICID is not ours to seed). Without it,
+#     company creation fails at call time: env.companyDefaultCode's last two
+#     segments must match an object-type/sub-type pair ICID has been seeded
+#     with. post-install AND post-upgrade — ICID's seed guards every write,
+#     so it converges rather than duplicating.
+#
+# Either Job, if its target never becomes reachable, logs the manual
+# command and exits without failing the release.
 seed:
   enabled: true
-  # How long to wait for the backend to answer before giving up and
+  # How long each Job waits for its target to answer before giving up and
   # leaving it to be seeded by hand.
   waitTimeoutSeconds: 300

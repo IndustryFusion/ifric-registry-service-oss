@@ -22,6 +22,12 @@ WHAT HAPPENS NOW
 {{- if .Values.seed.enabled }}
   3. The seed Job POSTs /script once the backend answers, creating the
      default access groups and company categories. It runs on install only.
+{{- if .Values.icid.enabled }}
+  4. The icid-seed Job POSTs the bundled ICID's own /script, creating its
+     dataspace/region/country/object-type taxonomy. Company creation fails
+     without it: env.companyDefaultCode ({{ .Values.env.companyDefaultCode }}) is checked
+     against those object types. Safe to re-run, so it also runs on upgrade.
+{{- end }}
 {{- end }}
 
 Watch it come up:
@@ -55,8 +61,18 @@ SEED DATA (seed.enabled=false)
 {{- if .Values.icid.enabled }}
 
 ICID
-  Bundled in this release. Its taxonomy is separate from this service's and
-  needs its own one-time seed:
+  Bundled in this release, with its own MongoDB.
+{{- if .Values.seed.enabled }}
+  Its taxonomy is seeded automatically by the icid-seed Job — check it with:
+
+    kubectl logs job/{{ include "ifric-registry-service.fullname" . }}-icid-seed
+
+  If that Job timed out waiting for ICID, seed it by hand (safe to re-run):
+{{- else }}
+  seed.enabled=false, so its taxonomy is NOT seeded. Company creation will
+  fail until you do it — env.companyDefaultCode ({{ .Values.env.companyDefaultCode }}) is checked
+  against ICID's object types. Safe to re-run:
+{{- end }}
 
     kubectl port-forward svc/{{ include "ifric-registry-service.icidHost" . }} {{ .Values.icid.service.port }}:{{ .Values.icid.service.port }}
     curl -X POST http://localhost:{{ .Values.icid.service.port }}/script
