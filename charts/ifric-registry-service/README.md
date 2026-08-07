@@ -1,103 +1,219 @@
 # ifric-registry-service Helm chart
 
-Deploys this registry service to Kubernetes: PostgreSQL + a bundled
-Keycloak (the app's sole identity provider), with an optional bundled
-[ICID](https://github.com/IndustryFusion/icidservice) for company creation
-and certificates. Two profiles, mirroring the root Compose files:
+Deploys the registry service to Kubernetes, together with as much or as
+little of its backing infrastructure as you want: PostgreSQL, Keycloak (the
+app's sole identity provider) and
+[ICID](https://github.com/IndustryFusion/icidservice).
 
-| Profile | Install with |
-|---|---|
-| Default (ICID external) | `values.yaml` alone |
-| Full (+ bundled ICID) | `values.yaml` + `values-full.yaml` |
+The chart also does the setup that used to be a manual click-through:
+a **bootstrap Job** creates the Keycloak realm, both confidential clients
+and the protocol mappers, and a **seed Job** loads the default RBAC groups
+and taxonomy. On a default install there is nothing to configure by hand.
+
+---
+
+## Quick start
+
+```bash
+cd backend
+docker build -t <registry>/ifric-registry-service:<tag> .
+docker push  <registry>/ifric-registry-service:<tag>
+cd ..
+
+helm install my-registry charts/ifric-registry-service \
+  --set image.repository=<registry>/ifric-registry-service \
+  --set image.tag=<tag> \
+  --set env.icidServiceBackendUrl=https://your-icid.example.com
+```
+
+That gives you: bundled PostgreSQL, bundled Keycloak (realm + clients +
+mappers created for you), migrations applied, seed data loaded, backend
+running. No secrets to copy, no admin console to visit.
+
+Add `-f charts/ifric-registry-service/values-full.yaml` to bundle ICID as
+well and drop the `env.icidServiceBackendUrl` flag.
+
+---
+
+## The three toggles
+
+Each backing service is independently bundled or external. They combine
+freely — bundled Keycloak with external Postgres and external ICID is a
+perfectly normal setup.
 
 ```mermaid
 flowchart LR
     Backend["Backend Pod<br/>(this app)"]
-    KC["Keycloak Pod<br/>(bundled or external)"]
-    PG[("Postgres<br/>bundled or external")]
-    ICID["ICID Pod<br/>(icid.enabled only,<br/>or external)"]
-    Mongo[("ICID MongoDB<br/>bundled or external,<br/>icid.enabled only")]
+    KC["Keycloak<br/>bundled or external"]
+    PG[("PostgreSQL<br/>bundled or external")]
+    ICID["ICID<br/>bundled or external"]
+    Mongo[("ICID's MongoDB<br/>bundled or external")]
 
     Backend -- "wait-for-postgres + migrate<br/>initContainers" --> PG
-    Backend -- "login / tokens / user mgmt" --> KC
-    Backend -. "company creation / certs" .-> ICID
-    KC -- "wait-for-postgres<br/>initContainer, KC_DB=postgres" --> PG
-    ICID -- "wait-for-mongo + init-replicaset<br/>initContainers (bundled only)" --> Mongo
+    Backend -- "login / tokens / user management" --> KC
+    Backend -. "company creation / certificates" .-> ICID
+    KC -- "KC_DB=postgres<br/>(same server, its own tables)" --> PG
+    ICID --> Mongo
 ```
 
-Postgres is shared by the backend and Keycloak (separate tables, no
-collision).
+### `postgres.enabled`
 
-## Topology — bundled or external, independently
-
-Every backing service can be either deployed by this chart or pointed at
-one you already run — pick per component:
-
-| Component | Bundled (default) | External |
+| | What happens | What you must set |
 |---|---|---|
-| PostgreSQL | `postgres.enabled=true` | `postgres.enabled=false` + `postgres.external.host`/`.port` |
-| Keycloak | `keycloak.enabled=true` | `keycloak.enabled=false` + `env.keycloak.url`/`.realm` |
-| ICID | `icid.enabled=true` (`values-full.yaml`) | `icid.enabled=false` (default) + `env.icidServiceBackendUrl` |
-| ICID's MongoDB | `icid.mongodb.enabled=true` (default, only when ICID is bundled) | `icid.mongodb.enabled=false` + `icid.mongodb.external.url` |
+| `true` (default) | A single-replica StatefulSet + PVC. `postgres.auth.*` **provisions** it on first boot. | Nothing. Optionally `postgres.persistence.size`/`.storageClassName`. |
+| `false` | No StatefulSet. Backend and Keycloak both connect out. | `postgres.external.host`, `.port`, and `postgres.auth.user`/`.password`/`.database` **matching credentials that already exist there**. |
 
-These combine freely — e.g. bundled Keycloak + external Postgres +
-external ICID, or external Keycloak + bundled Postgres + bundled ICID with
-its own external MongoDB. A fully-external install (everything above set
-to external) deploys just the backend Pod and nothing else.
+Two things people get wrong here:
 
-```bash
-# Example: external Postgres, bundled Keycloak, external ICID
-helm install my-registry charts/ifric-registry-service \
-  --set image.repository=<your-registry>/ifric-registry-service --set image.tag=<tag> \
-  --set postgres.enabled=false --set postgres.external.host=my-pg.example.com \
-  --set env.icidServiceBackendUrl=https://your-real-icid.example.com
+- **Keycloak shares this database.** `KC_DB=postgres` points the bundled
+  Keycloak at the same server (its own tables, no collision), so with
+  `postgres.enabled=false` your *external* server also hosts Keycloak's
+  schema. The credentials in `postgres.auth.*` need rights to create it.
+- **`postgres.auth.*` changes meaning.** Bundled, it *creates* the user and
+  database. External, it's what the app *logs in with* — the values must
+  already be true over there, and changing the password later won't
+  re-provision anything.
 
-# Example: full profile, but ICID's MongoDB is your own external replica set
-helm install my-registry charts/ifric-registry-service \
-  -f charts/ifric-registry-service/values.yaml -f charts/ifric-registry-service/values-full.yaml \
-  --set image.repository=<your-registry>/ifric-registry-service --set image.tag=<tag> \
-  --set icid.mongodb.enabled=false \
-  --set icid.mongodb.external.url="mongodb://my-mongo.example.com:27017/icid-service?replicaSet=rs0"
+TLS to an external Postgres is off unless you ask for it — the bundled one
+has no TLS listener, so the chart sets `env.dbSsl=false`. Managed Postgres
+usually requires it:
+
+```yaml
+env:
+  dbSsl: true
+  dbSslRejectUnauthorized: false   # or true + dbSslCa for a private CA
 ```
 
-## Install
+### `keycloak.enabled`
 
-**1. Build and push this service's image** (ICID and Keycloak need no
-build/push — both default to published images):
+| | What happens | What you must set |
+|---|---|---|
+| `true` (default) | A Keycloak Deployment (`start-dev`), backed by the Postgres above. `KEYCLOAK_URL`/`KEYCLOAK_REALM` are computed for you; the realm defaults to `ifric`. | Nothing. |
+| `false` | No Keycloak Pod. The backend points at yours. | `env.keycloak.url` and `env.keycloak.realm` (both `required` — install fails without them). |
+
+> **`env.keycloak.url` must include the scheme.**
+> `http://keycloak.ns.svc.cluster.local:8080`, not
+> `keycloak.ns.svc.cluster.local:8080`. The app concatenates it directly
+> (`${url}/realms/${realm}/...`), so a missing scheme produces requests
+> that fail at the HTTP client rather than a clear configuration error.
+
+Either way, **`keycloak.bootstrap.enabled` decides whether the chart
+configures the realm** — see below. It is independent of
+`keycloak.enabled`: an external Keycloak needs exactly the same objects,
+and the Job is happy to create them there if you give it admin credentials.
+
+### `icid.enabled`
+
+ICID mints `company_ifric_id` and issues Hedera-backed certificates.
+
+| | What happens | What you must set |
+|---|---|---|
+| `false` (default) | Nothing deployed. The backend calls out. | `env.icidServiceBackendUrl` — **`required`**, install fails without it. |
+| `true` (via `values-full.yaml`) | ICID Deployment + its own MongoDB StatefulSet (single-node replica set, initialised by an initContainer). The URL is computed; `env.icidServiceBackendUrl` is ignored. | Nothing. Set `icid.mongodb.enabled=false` + `icid.mongodb.external.url` to use your own replica set. |
+
+Without a reachable ICID, **company creation and certificates fail at call
+time** — not at boot. Users, access groups, assets, twins, factories and
+product tagging all work regardless.
 
 ```bash
-cd backend
-docker build -t <your-registry>/ifric-registry-service:<tag> .
-docker push <your-registry>/ifric-registry-service:<tag>
+# external Postgres, bundled Keycloak, external ICID
+helm install my-registry charts/ifric-registry-service \
+  --set image.repository=<registry>/ifric-registry-service --set image.tag=<tag> \
+  --set postgres.enabled=false \
+  --set postgres.external.host=pg.example.com \
+  --set postgres.auth.user=ifric --set postgres.auth.password=<pw> --set postgres.auth.database=ifric \
+  --set env.dbSsl=true --set env.dbSslRejectUnauthorized=false \
+  --set env.icidServiceBackendUrl=https://icid.example.com
 ```
 
-**2. Install the chart** — pick a profile (see [Topology](#topology-bundled-or-external-independently)
-above for external-Postgres/external-Mongo variants):
+---
+
+## What `helm install` actually does
+
+```
+1. Postgres StatefulSet                    (if bundled)
+2. Keycloak Deployment                     (if bundled) — waits for Postgres
+3. Backend Deployment
+     initContainer wait-for-postgres
+     initContainer migrate  → npm run migration:run
+4. post-install hook, weight 0  → keycloak-bootstrap Job
+     realm, user profile, ifric + ifric-admin clients, mappers, role grant
+5. post-install hook, weight 10 → seed Job
+     waits for the backend, then POST /script
+```
+
+The backend may log Keycloak errors between steps 3 and 4 — the clients do
+not exist yet. It settles once the bootstrap Job finishes; no restart
+needed.
+
+---
+
+## Keycloak setup
+
+### Automatic (default)
+
+`keycloak.bootstrap.enabled=true` runs a Job that creates, idempotently:
+
+| | Why it's needed |
+|---|---|
+| The realm (`env.keycloak.realm`, default `ifric`) | Nothing else can exist without it |
+| `unmanagedAttributePolicy=ENABLED` on the realm user profile | **Non-obvious.** Keycloak 24+ drops unknown user attributes silently — the Admin API still returns 201, but `company_ifric_id`/`user_id` are never stored, so every token comes back without them and every guarded endpoint 403s |
+| `VERIFY_PROFILE` required action disabled | **Non-obvious.** It requires first *and* last name; the app only collects one name, so every user it creates would be stuck at `Account is not fully set up` and the password grant would fail |
+| Client `ifric` — confidential, direct access grants on | End-user login is a ROPC password grant |
+| Protocol mappers `company_ifric_id`, `user_id` on `ifric` | Projects the stored user attributes into the access token, which is what authorization reads |
+| Client `ifric-admin` — confidential, service account on | Admin API calls: create user, reset password, delete user |
+| `realm-management:manage-users` on that service account | Without it the Admin API calls 403 |
+
+It re-runs on every `helm upgrade`, checking before creating, so it also
+repairs a realm that drifted.
+
+**The client secrets need no copying.** Leave
+`secrets.keycloakClientSecret`/`keycloakAdminClientSecret` blank and the
+chart generates them, reuses them across upgrades (via `lookup`, the same
+way `keycloakAdminPassword` works), and the Job *sets* those exact values
+on the Keycloak clients. Both sides agree by construction. Set them
+explicitly if you'd rather choose the value.
+
+For an **external** Keycloak, the Job needs credentials that can create a
+realm there:
+
+```yaml
+keycloak:
+  enabled: false
+  adminUser: admin              # your external instance's admin
+  bootstrap:
+    enabled: true
+secrets:
+  keycloakAdminPassword: <that admin's password>
+env:
+  keycloak:
+    url: https://keycloak.example.com
+    realm: ifric
+```
+
+### Manual
+
+Set `keycloak.bootstrap.enabled=false` if your Keycloak is owned by another
+team, or you want to control the realm yourself. Then:
+
+1. Follow [`docs/keycloak-setup.md`](../../docs/keycloak-setup.md) — it
+   covers the same objects as the table above, **including the two
+   non-obvious realm settings**, which are easy to miss by hand and produce
+   confusing failures.
+2. Read both client secrets from the admin console.
+3. Supply them, because nothing will generate them for you:
 
 ```bash
-# Default profile — needs a real, external ICID instance
-helm install my-registry charts/ifric-registry-service \
-  --set image.repository=<your-registry>/ifric-registry-service \
-  --set image.tag=<tag> \
-  --set env.icidServiceBackendUrl=https://your-real-icid.example.com
-
-# Full profile — bundles ICID too, no extra --set needed for it
-helm install my-registry charts/ifric-registry-service \
-  -f charts/ifric-registry-service/values.yaml \
-  -f charts/ifric-registry-service/values-full.yaml \
-  --set image.repository=<your-registry>/ifric-registry-service \
-  --set image.tag=<tag>
+helm upgrade my-registry charts/ifric-registry-service --reuse-values \
+  --set secrets.keycloakClientSecret=<ifric secret> \
+  --set secrets.keycloakAdminClientSecret=<ifric-admin secret>
 ```
 
-This succeeds, but the backend Pod **crash-loops** until step 3 is done
-(unless you set `keycloak.enabled=false` with an already-configured
-external Keycloak, in which case skip to step 5).
+With bootstrap off and these blank, the backend **fails fast at boot** —
+deliberately. A generated secret would be one Keycloak has never heard of,
+turning a clear startup error into logins that fail for no visible reason.
 
-**3. Configure Keycloak** (bundled, comes up empty — one-time manual step):
-
-Full walkthrough (realm, both clients, the two protocol mappers):
-[`../../docs/keycloak-setup.md`](../../docs/keycloak-setup.md#kubernetes-helm).
-Short version:
+For the bundled Keycloak's admin console:
 
 ```bash
 kubectl get secret my-registry-ifric-registry-service-secret \
@@ -105,54 +221,146 @@ kubectl get secret my-registry-ifric-registry-service-secret \
 kubectl port-forward svc/my-registry-ifric-registry-service-keycloak 8080:8080
 ```
 
-Open `http://localhost:8080`, log in as `admin` with the password above,
-then create the realm, the `ifric`/`ifric-admin` clients, and the two
-`company_ifric_id`/`user_id` protocol mappers on `ifric` as described in
-that doc.
+---
 
-**4. Give the backend those secrets:**
+## Dataspace participants
+
+A separate application — the dataspace — runs **its own client in this same
+realm**, configured by that team. This chart does not create it and must
+not: it isn't ours.
+
+The split is simply which client owns which mapper:
+
+| Client | Owned by | Mappers | Claims in its tokens |
+|---|---|---|---|
+| `ifric` | this chart's bootstrap Job | `company_ifric_id`, `user_id` | those two |
+| `data-space` | the dataspace team | `participant_id` | that one |
+
+Attributes live on the **user account**, which is shared realm-wide;
+mappers live on a **client** and decide which attributes reach the tokens
+*that client* issues. So neither team's mappers can affect the other's
+tokens, and neither needs anything from the other.
+
+This service accepts **either** token. When an IFRIC company is onboarded
+into the dataspace, its `participant_id` is set to a verbatim copy of its
+`company_ifric_id`, so a token carrying only `participant_id` is matched
+against the `Company` table and treated as that company. Participants that
+originated in the dataspace's own registry match nothing here and are
+denied.
+
+Nothing to configure in this chart for it. Full behaviour, including which
+endpoints a participant token can reach, is in
+[`docs/keycloak-setup.md`](../../docs/keycloak-setup.md#dataspace-participants-the-data-space-client).
+
+---
+
+## Seed data
+
+`seed.enabled=true` (default) POSTs `/script` once the backend answers,
+creating the default access groups (`admin`, `read_only`, ...), the
+company-category taxonomy and example products. **A fresh database has no
+access groups at all**, so without this `createCompany` has no `admin`
+group to assign and every permission check fails.
+
+It is a **`post-install` hook only**. `/script` is not idempotent — it
+inserts unconditionally — so running it on every upgrade would duplicate
+every group and category. If the backend isn't reachable in time
+(`seed.waitTimeoutSeconds`, default 300) the Job says so and exits
+*without* failing the release; seed by hand afterwards:
 
 ```bash
-helm upgrade my-registry charts/ifric-registry-service \
-  --reuse-values \
-  --set secrets.keycloakClientSecret=<step-3.2-secret> \
-  --set secrets.keycloakAdminClientSecret=<step-3.3-secret>
+kubectl exec deploy/my-registry-ifric-registry-service-backend -- \
+  node -e "fetch('http://localhost:4007/script',{method:'POST'}).then(r=>r.text()).then(console.log)"
 ```
 
-The backend picks these up on its next restart and starts authenticating.
-
-**5. Verify:**
+With `icid.enabled=true`, ICID has its own separate taxonomy to seed:
 
 ```bash
-kubectl get pods
-kubectl port-forward svc/my-registry-ifric-registry-service-backend 4007:4007
-curl http://localhost:4007/api-docs
+kubectl port-forward svc/my-registry-ifric-registry-service-icid 4010:4010
+curl -X POST http://localhost:4010/script
 ```
+
+---
 
 ## Reference
 
-**Secrets** (all in one Kubernetes `Secret`):
+### Secrets
+
+All land in one Kubernetes `Secret`.
 
 | Value | Default | Notes |
 |---|---|---|
-| `secrets.keycloakAdminPassword` | auto-generated | Keycloak admin console login; reused across upgrades. Only relevant with the bundled Keycloak. |
-| `secrets.keycloakClientSecret` | `""` | From step 3.2 above |
-| `secrets.keycloakAdminClientSecret` | `""` | From step 3.3 above |
-| `secrets.hederaKeySecret` | `""` | Optional — unset disables `/certificate/*` |
-| `secrets.companyCreationApiKey` | auto-generated | Placeholder gate for `POST /company/create-company` (`X-API-Key` header) ahead of a real external-API-token flow; reused across upgrades like `keycloakAdminPassword` |
-| `postgres.auth.password` | `ifric` | Also the password used to connect to an external Postgres — set it to match. Changing it post-install doesn't rotate it inside an already-initialized bundled Postgres volume. |
-| `secrets.existingSecret` | `""` | Name of a Secret you manage yourself (Vault, Sealed Secrets, ...) with keys `KEYCLOAK_ADMIN_PASSWORD`/`KEYCLOAK_CLIENT_SECRET`/`KEYCLOAK_ADMIN_CLIENT_SECRET`/`HEDERA_KEY_SECRET`/`COMPANY_CREATION_API_KEY`/`DB_PASSWORD` — when set, overrides all of the above |
+| `secrets.keycloakClientSecret` | generated | Only when `keycloak.bootstrap.enabled`; otherwise required from you |
+| `secrets.keycloakAdminClientSecret` | generated | Same |
+| `secrets.keycloakAdminPassword` | generated | Keycloak's admin login. With an external Keycloak + bootstrap on, set it to *that* instance's admin password |
+| `secrets.companyCreationApiKey` | generated | `X-API-Key` gate on `POST /company/create-company` |
+| `secrets.hederaKeySecret` | `""` | Optional — blank disables `/certificate/*` entirely |
+| `postgres.auth.password` | `ifric` | Provisions the bundled Postgres; must *match* an external one |
+| `secrets.existingSecret` | `""` | Your own Secret with keys `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_ADMIN_CLIENT_SECRET`, `HEDERA_KEY_SECRET`, `COMPANY_CREATION_API_KEY`, `DB_PASSWORD`. Overrides everything above and the chart creates no Secret |
 
-**Values** (full list with comments in `values.yaml`, mirrors `backend/.env.example`):
+Generated values are minted once and **reused on every later upgrade** by
+reading the live Secret back, so upgrades never rotate them out from under
+you.
+
+### Values
+
+Full list with comments in `values.yaml`; it mirrors `backend/.env.example`.
 
 | Value | Default | Notes |
 |---|---|---|
-| `replicaCount` | `1` | Backend replica count |
-| `postgres.enabled` | `true` | Set `false` + `postgres.external.host`/`.port` for an external instance |
-| `env.dbSsl` | `false` | Backend defaults `DB_SSL` on; chart sets it `false` since the bundled Postgres has no TLS listener — set `true` once pointed at an external instance that requires TLS. See `values.yaml` for `dbSslRejectUnauthorized`/`dbSslCa` |
-| `postgres.persistence.enabled` | `true` | Set `false` for ephemeral storage — testing only; ignored when `postgres.enabled=false` |
-| `keycloak.enabled` | `true` | Set `false` + `env.keycloak.url`/`.realm` for an external instance |
-| `icid.enabled` | `false` | Set via `values-full.yaml`; `false` needs `env.icidServiceBackendUrl` pointed at an external instance |
-| `icid.mongodb.enabled` | `true` | Only relevant when `icid.enabled=true`. Set `false` + `icid.mongodb.external.url` for an external replica set |
-| `icid.mongodb.persistence.enabled` | `true` | Same ephemeral-storage toggle, for the bundled MongoDB |
-| `ingress.enabled` | `false` | Requires `ingress.host` |
+| `image.repository` / `.tag` | — | Yours to build and push |
+| `image.pullPolicy` | `Always` | Deliberate: mutable tags plus `IfNotPresent` make a node serve a stale cached image forever. Switch to `IfNotPresent` only with immutable tags |
+| `replicaCount` | `1` | |
+| `postgres.enabled` | `true` | `false` needs `postgres.external.host`/`.port` |
+| `postgres.persistence.enabled` | `true` | `false` is ephemeral — testing only |
+| `env.dbSsl` | `false` | Backend defaults it on; the chart forces it off for the bundled Postgres, which has no TLS listener |
+| `keycloak.enabled` | `true` | `false` needs `env.keycloak.url`/`.realm` |
+| `keycloak.bootstrap.enabled` | `true` | Creates realm/clients/mappers. Independent of `keycloak.enabled` |
+| `icid.enabled` | `false` | `true` via `values-full.yaml`; `false` needs `env.icidServiceBackendUrl` |
+| `icid.mongodb.enabled` | `true` | Only when ICID is bundled |
+| `seed.enabled` | `true` | `post-install` only |
+| `env.companyDefaultCode` | `IFX-COM-NAP` | Must match an object-type/subtype pair seeded in your ICID, compared case-sensitively |
+| `ingress.enabled` | `false` | Needs `ingress.host` |
+
+---
+
+## Troubleshooting
+
+**Backend crash-loops with a missing-env error.** `env.constants.ts` fails
+fast. With bootstrap off, this is the expected state until you supply both
+client secrets.
+
+**Login works, but every endpoint returns 403.** The token has no
+`company_ifric_id`/`user_id`. Either the mappers are missing, or the realm
+is dropping the attributes (`unmanagedAttributePolicy`) — both are what the
+bootstrap Job exists to prevent. Decode a real token before digging
+further. Accounts created before the mappers existed need
+`npm run backfill:keycloak-attributes`.
+
+**`pg_hba.conf rejects connection ... no encryption`.** Your Postgres
+requires TLS: set `env.dbSsl=true`. If the next error mentions a
+self-signed certificate, add `env.dbSslRejectUnauthorized=false` or supply
+`env.dbSslCa`.
+
+**A change to values doesn't reach the running Pod.** ConfigMap-only edits
+don't roll the Deployment. `kubectl delete pod -l
+app.kubernetes.io/component=backend` to force it. If the *image* seems
+stale, check that the node's digest matches your registry — `kubectl get
+pod <pod> -o jsonpath='{.status.initContainerStatuses[*].imageID}'`.
+
+**MongoDB StatefulSet never creates its Pod**, with a `FailedCreate` event
+about a label over 63 characters. Your release name is too long. The chart
+truncates StatefulSet names to 52 to leave room for the pod's
+`controller-revision-hash` label, so this should be rare — if you hit it,
+shorten the release name or set `fullnameOverride`.
+
+**The bootstrap Job fails to authenticate.** With an external Keycloak,
+check that `env.keycloak.url` includes the scheme and that
+`keycloak.adminUser` / `secrets.keycloakAdminPassword` are that instance's
+admin credentials, not the bundled defaults.
+
+```bash
+kubectl logs job/my-registry-ifric-registry-service-keycloak-bootstrap
+kubectl logs job/my-registry-ifric-registry-service-seed
+kubectl logs <backend-pod> -c migrate
+```

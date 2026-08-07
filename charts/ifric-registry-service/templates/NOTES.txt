@@ -1,40 +1,78 @@
 {{ include "ifric-registry-service.fullname" . }} has been deployed.
 
-1. The backend Pod runs two initContainers before the app starts:
-   wait-for-postgres (loops pg_isready) and migrate (npm run migration:run).
-   Check their progress with:
+WHAT HAPPENS NOW
+  1. The backend Pod runs two initContainers before the app starts:
+     wait-for-postgres, then migrate (npm run migration:run).
+{{- if .Values.keycloak.bootstrap.enabled }}
+  2. The keycloak-bootstrap Job creates the realm '{{ .Values.env.keycloak.realm | default "ifric" }}', the
+     'ifric' and '{{ .Values.env.keycloak.adminClientId }}' clients, the company_ifric_id/user_id
+     protocol mappers, and the manage-users grant. The backend may log
+     Keycloak errors until it finishes — that is expected, and it recovers
+     on its own without a restart.
+{{- else }}
+  2. keycloak.bootstrap.enabled=false — NOTHING configures Keycloak for you.
+     The backend will crash-loop on its fail-fast env check until you create
+     the realm/clients/mappers yourself and supply both client secrets. See
+     docs/keycloak-setup.md, then:
 
-     kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=backend
-     kubectl logs <pod-name> -c migrate
+       helm upgrade {{ .Release.Name }} <chart> --reuse-values \
+         --set secrets.keycloakClientSecret=<ifric secret> \
+         --set secrets.keycloakAdminClientSecret=<ifric-admin secret>
+{{- end }}
+{{- if .Values.seed.enabled }}
+  3. The seed Job POSTs /script once the backend answers, creating the
+     default access groups and company categories. It runs on install only.
+{{- end }}
 
-2. Once the backend Pod is Ready, reach it with:
+Watch it come up:
 
-     kubectl port-forward svc/{{ include "ifric-registry-service.fullname" . }}-backend {{ .Values.service.port }}:{{ .Values.service.port }}
-     curl http://localhost:{{ .Values.service.port }}/
-     curl -X POST http://localhost:{{ .Values.service.port }}/script   # one-time seed data
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- if .Values.keycloak.bootstrap.enabled }}
+  kubectl logs job/{{ include "ifric-registry-service.fullname" . }}-keycloak-bootstrap
+{{- end }}
+{{- if .Values.seed.enabled }}
+  kubectl logs job/{{ include "ifric-registry-service.fullname" . }}-seed
+{{- end }}
+
+REACH THE API
+
+  kubectl port-forward svc/{{ include "ifric-registry-service.fullname" . }}-backend {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl http://localhost:{{ .Values.service.port }}/api-docs
+
+{{- if not .Values.seed.enabled }}
+
+SEED DATA (seed.enabled=false)
+  A fresh database has no AccessGroup rows, so createCompany has no 'admin'
+  group to assign and every permission check fails. Seed it once:
+
+    kubectl exec deploy/{{ include "ifric-registry-service.fullname" . }}-backend -- \
+      node -e "fetch('http://localhost:{{ .Values.service.port }}/script',{method:'POST'}).then(r=>r.text()).then(console.log)"
+
+  Run it ONCE — /script inserts unconditionally, so a second run duplicates
+  every access group and category.
+{{- end }}
 
 {{- if .Values.icid.enabled }}
 
-3. ICID is enabled in this release. Seed its taxonomy once too:
+ICID
+  Bundled in this release. Its taxonomy is separate from this service's and
+  needs its own one-time seed:
 
-     kubectl port-forward svc/{{ include "ifric-registry-service.icidHost" . }} {{ .Values.icid.service.port }}:{{ .Values.icid.service.port }}
-     curl -X POST http://localhost:{{ .Values.icid.service.port }}/script
+    kubectl port-forward svc/{{ include "ifric-registry-service.icidHost" . }} {{ .Values.icid.service.port }}:{{ .Values.icid.service.port }}
+    curl -X POST http://localhost:{{ .Values.icid.service.port }}/script
 {{- else }}
 
-3. ICID is NOT enabled in this release (icid.enabled=false) — company
-   creation and certificate endpoints need env.icidServiceBackendUrl
-   pointed at a real, externally-reachable ICID-compatible instance.
-   Everything else (users, access groups, assets, twins, factories,
-   product tagging) works without it.
+ICID
+  NOT enabled (icid.enabled=false). Company creation and certificates need
+  env.icidServiceBackendUrl pointed at a reachable instance — they fail at
+  call time, not at boot. Users, access groups, assets, twins, factories and
+  product tagging all work without it.
 {{- end }}
 
-{{- if not .Values.secrets.existingSecret }}
-{{- if not .Values.secrets.jwtSecret }}
+{{- if .Values.keycloak.enabled }}
 
-4. secrets.jwtSecret was not set — a random value was generated for you and
-   will be reused on every future `helm upgrade` of this release (not
-   re-randomized). Retrieve it if you need it outside the cluster:
+KEYCLOAK ADMIN CONSOLE
 
-     kubectl get secret {{ include "ifric-registry-service.secretName" . }} -o jsonpath='{.data.JWT_SECRET}' | base64 -d
-{{- end }}
+  kubectl get secret {{ include "ifric-registry-service.secretName" . }} -o jsonpath='{.data.KEYCLOAK_ADMIN_PASSWORD}' | base64 -d
+  kubectl port-forward svc/{{ include "ifric-registry-service.keycloakHost" . }} 8080:8080
 {{- end }}

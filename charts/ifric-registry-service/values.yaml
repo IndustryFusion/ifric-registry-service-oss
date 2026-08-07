@@ -8,9 +8,14 @@
 # both files: `helm install -f values.yaml -f values-full.yaml`.
 
 image:
-  repository: ifric-registry-service
-  tag: latest
-  pullPolicy: IfNotPresent
+  repository: ibn40/ifric-registry-service-oss
+  tag: test
+  # Always, not IfNotPresent: `test` is a mutable tag that gets re-pushed,
+  # and IfNotPresent makes a node serve whatever digest it cached the first
+  # time it saw the tag — silently pinning every pod to a stale build no
+  # matter how many times you helm upgrade. Switch back to IfNotPresent
+  # only if you move to immutable (versioned or digest-pinned) tags.
+  pullPolicy: Always
 
 replicaCount: 1
 
@@ -40,8 +45,8 @@ env:
   # the in-cluster URL/realm itself. clientId/adminClientId apply in both
   # cases and match this app's own env.constants.ts defaults.
   keycloak:
-    url: ""
-    realm: ""
+    url: "http://keycloak-service.iff.svc.cluster.local:8080"
+    realm: "ifric"
     clientId: "ifric"
     adminClientId: "ifric-admin"
   # Enables TLS on this app's connection to Postgres. The backend itself
@@ -49,8 +54,8 @@ env:
   # since the bundled postgres.enabled=true StatefulSet has no TLS
   # listener — flip to true only once pointed at a real external instance
   # via postgres.external.host that requires TLS. See backend/.env.example.
-  dbSsl: false
-  dbSslRejectUnauthorized: true
+  dbSsl: true
+  dbSslRejectUnauthorized: false
   # PEM contents of a custom/private CA cert, for a self-signed or
   # private-CA external Postgres. This is the public verification half of
   # a CA (not a credential), so it's kept here rather than under
@@ -68,12 +73,22 @@ secrets:
   # Generate with: openssl rand -hex 32
   hederaKeySecret: ""
   # Confidential-client secrets for Keycloak's "ifric" (end-user login) and
-  # "ifric-admin" (Admin API) clients — see the Keycloak section in this
-  # chart's README.md for the one-time manual realm/client setup that
-  # produces these values. Left blank, the backend Pod fails fast at boot
-  # (env.constants.ts) until you `helm upgrade` with the real values —
-  # there's no safe default, unlike hederaKeySecret, since the app has no
-  # auth mode that works without Keycloak.
+  # "ifric-admin" (Admin API) clients. What "blank" means depends on
+  # keycloak.bootstrap.enabled:
+  #
+  #   bootstrap ON  — blank is fine and is the normal case. The chart
+  #     generates a value on first install, reuses it on every later
+  #     upgrade (via `lookup`, same as keycloakAdminPassword), and the
+  #     bootstrap Job pushes that exact value onto the Keycloak client. The
+  #     two sides match by construction; nothing to copy.
+  #   bootstrap OFF — blank means the backend fails fast at boot
+  #     (env.constants.ts). You configured the clients yourself, so only
+  #     you know their secrets: read them from the admin console and set
+  #     them here. Auto-generating would be worse than useless — it would
+  #     write a value Keycloak has never heard of.
+  #
+  # Set them explicitly in either mode if you want to choose the value
+  # (e.g. it's provisioned by Vault); an explicit value always wins.
   keycloakClientSecret: ""
   keycloakAdminClientSecret: ""
   # Placeholder gate for POST /company/create-company ahead of a real
@@ -113,18 +128,18 @@ resources: {}
 # provision on first boot) or an external one you've already set up with
 # matching credentials.
 postgres:
-  enabled: true
+  enabled: false
   external:
     # Only used when enabled=false.
-    host: ""
+    host: "acid-cluster.iff.svc.cluster.local"
     port: 5432
   image:
     repository: postgres
     tag: "16"
   auth:
-    user: ifric
-    password: ifric
-    database: ifric_registry_service
+    user: dbreader
+    password: ""
+    database: ngb
   service:
     port: 5432
   persistence:
@@ -146,7 +161,7 @@ ingress:
 # unmodified ibn40/icid-backend image — override them if you're running
 # your own fork/build instead.
 icid:
-  enabled: false
+  enabled: true
   image:
     repository: ibn40/icid-backend
     tag: latest
@@ -191,11 +206,57 @@ icid:
 # backend's own) rather than giving Keycloak its own StatefulSet+PVC —
 # see templates/keycloak/deployment.yaml.
 keycloak:
-  enabled: true
+  enabled: false
   image:
     repository: quay.io/keycloak/keycloak
     tag: "26.0"
     pullPolicy: IfNotPresent
   # Keycloak's own admin-console login username — see
-  # secrets.keycloakAdminPassword for the password.
+  # secrets.keycloakAdminPassword for the password. Used by the bundled
+  # instance AND, when bootstrap.enabled=true with keycloak.enabled=false,
+  # as the credentials the bootstrap Job authenticates to your *external*
+  # Keycloak with (it needs realm-creation rights there).
   adminUser: admin
+
+  # One-time setup Job (templates/keycloak/bootstrap-job.yaml) that creates
+  # everything this app needs inside Keycloak — the realm, the confidential
+  # "ifric" and "ifric-admin" clients, the two protocol mappers, and the
+  # manage-users role grant — so none of it has to be clicked through the
+  # admin console. It runs as a post-install/post-upgrade Helm hook and is
+  # idempotent: it checks for each object before creating it, so re-running
+  # on every upgrade is safe and converges drifted config back.
+  #
+  # It also *sets* the two client secrets to the values in the release
+  # Secret rather than letting Keycloak generate them, so the backend and
+  # Keycloak agree by construction and there is nothing to copy by hand.
+  # See secrets.keycloakClientSecret below for where those come from.
+  #
+  # Set enabled=false if you'd rather configure the realm yourself, or if
+  # your external Keycloak is managed by another team and shouldn't be
+  # written to by a chart. Then it's the manual walkthrough in
+  # docs/keycloak-setup.md, and you must supply both client secrets.
+  bootstrap:
+    enabled: true
+    # Applies to the Job itself. Keycloak can take a while to accept
+    # connections on a cold start; the Job already waits for it internally,
+    # so this only covers a genuinely failed run.
+    backoffLimit: 3
+
+# One-time seed Job (templates/backend/seed-job.yaml): POSTs /script once
+# the backend is reachable, creating the default RBAC access groups
+# ("admin", "read_only", ...), the company-category taxonomy, and example
+# products. Without it the database has no AccessGroup rows, so
+# createCompany has no "admin" group to assign and every permission check
+# fails.
+#
+# post-install ONLY, deliberately: /script is not idempotent (it blindly
+# inserts, see backend/src/endpoints/script/script.service.ts), so running
+# it again on every upgrade would duplicate every access group and
+# category. If it doesn't run — backend not ready in time, say — the Job
+# says so and exits without failing the release; seed manually afterwards
+# with the curl in NOTES.txt.
+seed:
+  enabled: true
+  # How long to wait for the backend to answer before giving up and
+  # leaving it to be seeded by hand.
+  waitTimeoutSeconds: 300

@@ -1,0 +1,68 @@
+{{- if .Values.keycloak.bootstrap.enabled }}
+{{/*
+Runs the realm/client/mapper setup that would otherwise be a click-through
+in the admin console. A post-install AND post-upgrade hook because the
+script is idempotent: on upgrade it re-asserts the client secrets and fills
+in anything missing, which is also how a realm that drifted gets repaired.
+
+Not gated on keycloak.enabled — an external Keycloak needs exactly the same
+objects. What changes is only which URL it talks to (the ConfigMap already
+resolves KEYCLOAK_URL both ways) and whose admin credentials it uses.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-keycloak-bootstrap
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    # Jobs are immutable, so the previous run must go before this one is
+    # created — otherwise the second `helm upgrade` fails on a name clash.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.keycloak.bootstrap.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: keycloak-bootstrap
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          # The Keycloak image purely for its kcadm.sh CLI — no server is
+          # started here. Same image as the bundled Deployment, so with
+          # keycloak.enabled=true this is already on the node.
+          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
+          command: ["sh", "/scripts/bootstrap.sh"]
+          env:
+            # Keycloak's own admin credentials — the bundled instance's, or
+            # your external instance's when keycloak.enabled=false.
+            - name: KEYCLOAK_ADMIN
+              value: {{ .Values.keycloak.adminUser | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ifric-registry-service.secretName" . }}
+                  key: KEYCLOAK_ADMIN_PASSWORD
+          envFrom:
+            # KEYCLOAK_URL/REALM/CLIENT_ID/ADMIN_CLIENT_ID from the
+            # ConfigMap and the two client secrets from the Secret — the
+            # exact same values the backend itself reads, which is what
+            # guarantees the two sides agree.
+            - configMapRef:
+                name: {{ include "ifric-registry-service.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ifric-registry-service.secretName" . }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "ifric-registry-service.fullname" . }}-keycloak-bootstrap
+{{- end }}

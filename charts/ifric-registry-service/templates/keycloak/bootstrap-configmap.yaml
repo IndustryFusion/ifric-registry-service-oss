@@ -1,0 +1,194 @@
+{{- if .Values.keycloak.bootstrap.enabled }}
+{{/*
+The bootstrap script lives in a ConfigMap rather than inline in the Job so
+it stays readable and diffable — it is the authoritative description of
+what this app needs to exist inside Keycloak, and it is easier to review
+here than escaped into a Job's command list.
+
+Everything it does is guarded by an existence check, so this is safe to run
+on every upgrade: unchanged objects are left alone, missing ones are
+created, and the two client secrets are re-asserted so a drifted or
+regenerated secret converges back to the one in the release Secret.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-keycloak-bootstrap
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak-bootstrap
+  annotations:
+    # Must exist before the Job that mounts it. Lower weight = applied
+    # earlier within the same hook phase.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+
+    KCADM=/opt/keycloak/bin/kcadm.sh
+    # kcadm persists its session to a config file; the image's default HOME
+    # is not reliably writable for this uid, so pin it somewhere that is.
+    CFG=/tmp/kcadm.config
+    kc() { "$KCADM" "$@" --config "$CFG"; }
+
+    echo "==> Keycloak bootstrap for realm '${KEYCLOAK_REALM}' at ${KEYCLOAK_URL}"
+
+    # Keycloak may still be starting (it waits on Postgres itself), and an
+    # external one may be briefly unreachable. Retry rather than fail the
+    # release on a cold start.
+    attempt=0
+    until kc config credentials \
+            --server "${KEYCLOAK_URL}" \
+            --realm master \
+            --user "${KEYCLOAK_ADMIN}" \
+            --password "${KEYCLOAK_ADMIN_PASSWORD}" >/dev/null 2>&1; do
+      attempt=$((attempt + 1))
+      if [ "$attempt" -ge 60 ]; then
+        echo "!! Could not authenticate to Keycloak at ${KEYCLOAK_URL} after 5 minutes."
+        echo "   Bundled Keycloak: check its Pod and its wait-for-postgres initContainer."
+        echo "   External Keycloak: check env.keycloak.url (it must include the scheme,"
+        echo "   e.g. http://host:8080) and that keycloak.adminUser /"
+        echo "   secrets.keycloakAdminPassword are that instance's admin credentials."
+        exit 1
+      fi
+      echo "   waiting for keycloak... (${attempt}/60)"
+      sleep 5
+    done
+    echo "==> Authenticated as ${KEYCLOAK_ADMIN}"
+
+    # --- realm ---------------------------------------------------------
+    if kc get "realms/${KEYCLOAK_REALM}" >/dev/null 2>&1; then
+      echo "==> Realm '${KEYCLOAK_REALM}' already exists"
+    else
+      kc create realms -s realm="${KEYCLOAK_REALM}" -s enabled=true
+      echo "==> Created realm '${KEYCLOAK_REALM}'"
+    fi
+
+    # --- realm user profile ---------------------------------------------
+    # Two non-obvious defaults in Keycloak 24+ that each silently break
+    # this app on a realm created with stock settings. Both verified
+    # against a real 26.0 instance; don't remove either without re-testing
+    # an actual login end to end.
+    #
+    # 1. Declarative user profiles ship with unmanaged attributes DISABLED,
+    #    so company_ifric_id/user_id are dropped on write. The Admin API
+    #    still answers 201 — the attributes just aren't there afterwards,
+    #    the protocol mappers below then map nothing, and every
+    #    company-scoped endpoint 403s on a token that looks fine.
+    kc update users/profile -r "${KEYCLOAK_REALM}" \
+      -s unmanagedAttributePolicy=ENABLED
+    echo "==> Realm user profile: unmanaged attributes enabled"
+
+    # 2. VERIFY_PROFILE requires firstName AND lastName. KeycloakService's
+    #    createUser sets only firstName (this app collects one name), so
+    #    every user it creates would be stuck at "Account is not fully set
+    #    up" and the password grant would fail with invalid_grant. There is
+    #    no browser flow here to complete a profile in — logins are ROPC —
+    #    so the action can only ever block, never resolve.
+    kc update authentication/required-actions/VERIFY_PROFILE -r "${KEYCLOAK_REALM}" \
+      -s enabled=false
+    echo "==> Realm required action VERIFY_PROFILE disabled"
+
+    # Resolves a client's internal UUID (which every sub-resource path
+    # needs) from its human clientId. Empty output means "not there".
+    client_uuid() {
+      kc get clients -r "${KEYCLOAK_REALM}" -q clientId="$1" \
+        --fields id --format csv --noquotes 2>/dev/null | head -1
+    }
+
+    # --- ifric: end-user login (ROPC) ----------------------------------
+    # Confidential + directAccessGrants is exactly what AuthService.logIn's
+    # password grant requires; standardFlow stays on so the same client can
+    # also back a browser login later.
+    IFRIC_UUID="$(client_uuid "${KEYCLOAK_CLIENT_ID}")"
+    if [ -z "${IFRIC_UUID}" ]; then
+      kc create clients -r "${KEYCLOAK_REALM}" \
+        -s clientId="${KEYCLOAK_CLIENT_ID}" \
+        -s enabled=true \
+        -s protocol=openid-connect \
+        -s publicClient=false \
+        -s standardFlowEnabled=true \
+        -s directAccessGrantsEnabled=true \
+        -s serviceAccountsEnabled=false \
+        -s secret="${KEYCLOAK_CLIENT_SECRET}"
+      IFRIC_UUID="$(client_uuid "${KEYCLOAK_CLIENT_ID}")"
+      echo "==> Created client '${KEYCLOAK_CLIENT_ID}'"
+    else
+      kc update "clients/${IFRIC_UUID}" -r "${KEYCLOAK_REALM}" \
+        -s publicClient=false \
+        -s directAccessGrantsEnabled=true \
+        -s secret="${KEYCLOAK_CLIENT_SECRET}"
+      echo "==> Client '${KEYCLOAK_CLIENT_ID}' already existed — secret and flags re-asserted"
+    fi
+
+    # --- protocol mappers on ifric -------------------------------------
+    # These project the company_ifric_id/user_id user attributes (stamped
+    # at user-creation time by CompanyService.createCompany /
+    # AuthService.createCompanyUser) into the access token, which is what
+    # every company-scoped endpoint authorizes against. Without them login
+    # succeeds but every guarded request 403s.
+    add_mapper() {
+      name="$1"
+      if kc get "clients/${IFRIC_UUID}/protocol-mappers/models" -r "${KEYCLOAK_REALM}" \
+           --fields name --format csv --noquotes 2>/dev/null | grep -qx "${name}"; then
+        echo "    mapper '${name}' already exists"
+        return 0
+      fi
+      kc create "clients/${IFRIC_UUID}/protocol-mappers/models" -r "${KEYCLOAK_REALM}" \
+        -s name="${name}" \
+        -s protocol=openid-connect \
+        -s protocolMapper=oidc-usermodel-attribute-mapper \
+        -s "config.\"user.attribute\"=${name}" \
+        -s "config.\"claim.name\"=${name}" \
+        -s 'config."jsonType.label"=String' \
+        -s 'config."access.token.claim"=true' \
+        -s 'config."id.token.claim"=true' \
+        -s 'config."userinfo.token.claim"=true'
+      echo "    created mapper '${name}'"
+    }
+    echo "==> Protocol mappers on '${KEYCLOAK_CLIENT_ID}'"
+    add_mapper company_ifric_id
+    add_mapper user_id
+
+    # --- ifric-admin: Admin API service account ------------------------
+    # Deliberately a second client: a leaked end-user-facing secret must
+    # not also be able to manage the realm's users. No interactive flows.
+    ADMIN_UUID="$(client_uuid "${KEYCLOAK_ADMIN_CLIENT_ID}")"
+    if [ -z "${ADMIN_UUID}" ]; then
+      kc create clients -r "${KEYCLOAK_REALM}" \
+        -s clientId="${KEYCLOAK_ADMIN_CLIENT_ID}" \
+        -s enabled=true \
+        -s protocol=openid-connect \
+        -s publicClient=false \
+        -s standardFlowEnabled=false \
+        -s directAccessGrantsEnabled=false \
+        -s serviceAccountsEnabled=true \
+        -s secret="${KEYCLOAK_ADMIN_CLIENT_SECRET}"
+      echo "==> Created client '${KEYCLOAK_ADMIN_CLIENT_ID}'"
+    else
+      kc update "clients/${ADMIN_UUID}" -r "${KEYCLOAK_REALM}" \
+        -s publicClient=false \
+        -s serviceAccountsEnabled=true \
+        -s secret="${KEYCLOAK_ADMIN_CLIENT_SECRET}"
+      echo "==> Client '${KEYCLOAK_ADMIN_CLIENT_ID}' already existed — secret and flags re-asserted"
+    fi
+
+    # manage-users on the service account is what lets KeycloakService
+    # create users, reset passwords and delete accounts. add-roles is not
+    # idempotent-friendly, so tolerate the "already assigned" case.
+    if kc add-roles -r "${KEYCLOAK_REALM}" \
+         --uusername "service-account-${KEYCLOAK_ADMIN_CLIENT_ID}" \
+         --cclientid realm-management \
+         --rolename manage-users >/dev/null 2>&1; then
+      echo "==> Granted realm-management:manage-users to service-account-${KEYCLOAK_ADMIN_CLIENT_ID}"
+    else
+      echo "==> realm-management:manage-users already granted (or the service account is still settling)"
+    fi
+
+    echo "==> Keycloak bootstrap complete."
+    echo "    The dataspace 'data-space' client is NOT created here — it belongs"
+    echo "    to that team and lives in this same realm. See docs/keycloak-setup.md."
+{{- end }}

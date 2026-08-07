@@ -1,0 +1,98 @@
+{{- if .Values.seed.enabled }}
+{{/*
+POSTs /script once, to create the default RBAC access groups, the
+company-category taxonomy and the example products. A fresh database has
+no AccessGroup rows at all, so without this createCompany has no "admin"
+group to hand its admin user and every later permission check fails.
+
+post-install ONLY — NOT post-upgrade. ScriptService.script() blindly
+inserts (no upsert, no existence check), so a second run duplicates every
+access group and category. "Runs once per install" is exactly the
+semantics /script was written for.
+
+Uses the backend's own image because it needs an HTTP client and node's
+global fetch is the one dependency guaranteed to be there — the postgres
+image has psql but no curl, and the app image is already on the node.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ifric-registry-service.fullname" . }}-seed
+  labels:
+    {{- include "ifric-registry-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seed
+  annotations:
+    "helm.sh/hook": post-install
+    # After the Keycloak bootstrap (weight 0): the backend can't finish
+    # starting until its client secrets exist, so seeding first would just
+    # spend the whole timeout waiting.
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  # No retries: a failed run means the backend never came up, and the Job
+  # already reports that clearly. Retrying would only repeat the wait.
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "ifric-registry-service.labels" . | nindent 8 }}
+        app.kubernetes.io/component: seed
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: BACKEND_URL
+              value: {{ printf "http://%s-backend:%v" (include "ifric-registry-service.fullname" .) .Values.service.port | quote }}
+            - name: WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.seed.waitTimeoutSeconds | quote }}
+          command:
+            - node
+            - -e
+            - |
+              const base = process.env.BACKEND_URL;
+              const deadline = Date.now() + Number(process.env.WAIT_TIMEOUT_SECONDS) * 1000;
+              const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+              (async () => {
+                // The backend answers / as soon as Nest is listening, which
+                // is after migrations and the env fail-fast check have both
+                // passed — so this doubles as "is the release actually
+                // healthy" before we write anything.
+                while (Date.now() < deadline) {
+                  try {
+                    const probe = await fetch(`${base}/`);
+                    if (probe.ok) break;
+                  } catch {
+                    // not up yet
+                  }
+                  console.log('   waiting for backend...');
+                  await sleep(5000);
+                }
+
+                if (Date.now() >= deadline) {
+                  // Deliberately exit 0: an unseeded database is a thing to
+                  // fix, not a reason to mark the whole release failed. The
+                  // manual command is in NOTES.txt.
+                  console.log('!! Backend did not become reachable before the timeout — seed skipped.');
+                  console.log('   Seed by hand once it is up:');
+                  console.log(`   kubectl exec deploy/<release>-backend -- node -e "fetch('http://localhost:{{ .Values.service.port }}/script',{method:'POST'}).then(r=>r.text()).then(console.log)"`);
+                  return;
+                }
+
+                const res = await fetch(`${base}/script`, { method: 'POST' });
+                const body = await res.text();
+                console.log(`==> POST /script -> ${res.status} ${body}`);
+                if (!res.ok) {
+                  // A real failure here (bad DB state, for instance) should
+                  // be visible, unlike the timeout case above.
+                  process.exit(1);
+                }
+                console.log('==> Seed complete: access groups, company categories and example products created.');
+              })().catch((err) => {
+                console.error(err);
+                process.exit(1);
+              });
+{{- end }}

@@ -107,6 +107,27 @@ templates/icid/mongodb-service.yaml) — only meaningful when
 {{- end -}}
 
 {{/*
+StatefulSet names — capped at 52, not the usual 63. The StatefulSet
+controller stamps every pod it creates with a controller-revision-hash
+label of "<statefulset-name>-<10-char-hash>", and a label VALUE over 63
+characters is rejected. The StatefulSet object itself is created fine, so
+this failure mode is invisible in `kubectl get sts` — it surfaces only as
+a FailedCreate event ("Pod ... is invalid: metadata.labels: Invalid
+value") and a pod that never appears at all. 52 + 1 + 10 = 63 exactly.
+Only StatefulSets need this; Deployments name their pods differently.
+These are names, not hostnames — nothing resolves them, so truncating is
+safe (Services are named via the *Host helpers above, which the workloads
+actually reference).
+*/}}
+{{- define "ifric-registry-service.icidMongoStsName" -}}
+{{- printf "%s-icid-mongodb" (include "ifric-registry-service.fullname" .) | trunc 52 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "ifric-registry-service.postgresStsName" -}}
+{{- printf "%s-postgres" (include "ifric-registry-service.fullname" .) | trunc 52 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
 In-cluster Keycloak Service host (matches templates/keycloak/service.yaml)
 — only meaningful when .Values.keycloak.enabled is true.
 */}}

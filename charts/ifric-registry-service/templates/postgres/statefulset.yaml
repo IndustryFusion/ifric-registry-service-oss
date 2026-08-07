@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "ifric-registry-service.fullname" . }}-postgres
+  name: {{ include "ifric-registry-service.postgresStsName" . }}
   labels:
     {{- include "ifric-registry-service.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
