@@ -1,0 +1,787 @@
+{
+  "info": {
+    "name": "IFF Dataspace \u2014 Data Push & Pull",
+    "description": "Pure data **push and pull** against the IFF Dataspace gateway \u2014 send as a factory\nowner, receive as a machine builder. Governance endpoints (capability requests/policy,\nconversation state) are deliberately left out; this is the transfer path only.\n\n### Setup\n\n1. Fill in `gatewayUrl`, `keycloakUrl`, `realm`.\n2. Fill in `foParticipantId`/`foClientSecret` and `mbParticipantId`/`mbClientSecret` \u2014 the\n   Keycloak `client_id` **is** the participant URN. Get the secrets from the management GUI\n   (Participants \u2192 Show credentials) or, with an admin token,\n   `GET {managementUrl}/api/participants/{participant_id}/credentials`.\n   Treat them as secrets: use a Postman environment or vault variables rather than committing\n   real values back into this file.\n3. Run **0 \u00b7 Tokens** \u2014 the test scripts store `foToken` / `mbToken`, which every other request\n   uses. Tokens live ~5 minutes; a 401 later just means re-run them.\n4. Run **1 \u00b7 Push** as FO, then **2 \u00b7 Pull** as MB. `messageId` is threaded automatically from\n   send to receive.\n\n### How the two sides connect\n\n```\nFO app \u2500\u2500POST /outbox/messages\u2500\u2500\u25b6 gateway \u2500\u2500\u25b6 FO adapter \u00b7\u00b7\u00b7EDC data plane\u00b7\u00b7\u00b7\u25b6 MB adapter \u25c0\u2500\u2500GET /inbox/messages\u2500\u2500 MB app\n```\n\nThe gateway reads `participant_id` from the JWT and proxies to *that* participant's own\nadapter \u2014 the token alone decides which side you are acting as, and there is no way to reach\nanother participant's adapter. Payload bytes never travel through the gateway: the receiver's\nconnector pulls them directly over the EDC data plane. `/internal/*` paths are blocked (404).\n\nSending is asynchronous (202 + background EDC workflow) and receiving is **polling** \u2014 no\npush/webhook/SSE transport exists today. The two \"poll until\u2026\" requests self-retry in the\nCollection Runner (max 15 attempts); set the Runner's Delay to ~2000 ms.\n\n### Errors\n\n| HTTP | Meaning |\n|---|---|\n| 401 | missing/expired JWT \u2014 re-run the token request |\n| 403 | no `participant_id` claim, participant not in the registry, or same-type send |\n| 404 | `internal/` path (blocked), or the message doesn't exist yet on the receiving side |\n| 409 | conversation state violation (e.g. already closed) |\n| 422 | structural violation (wrong required/forbidden fields for the performative) |\n| 503 / 504 | gateway cannot reach, or timed out waiting on, the adapter |\n\nA duplicate or race-losing `close` is not an error: 202 with `\"applied\": false`.\n\n### Source of truth\n\nIFF-Dataspace: `gateway-api.md` (full reference), `flow.md` (end-to-end walkthrough),\n`asyncapi.yaml` (per-performative message schemas). A self-hosted (external) participant uses\nthese exact paths against its own adapter directly, with no gateway in the path.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "gatewayUrl",
+      "value": "https://dev-dataspace-gateway.industryfusion.org",
+      "type": "string"
+    },
+    {
+      "key": "keycloakUrl",
+      "value": "https://dev.industry-fusion.com/auth",
+      "type": "string"
+    },
+    {
+      "key": "realm",
+      "value": "dataspace",
+      "type": "string"
+    },
+    {
+      "key": "foParticipantId",
+      "value": "urn:ifric:ifx-eur-com-own-...",
+      "type": "string"
+    },
+    {
+      "key": "foClientSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "mbParticipantId",
+      "value": "urn:ifric:ifx-eur-com-nap-...",
+      "type": "string"
+    },
+    {
+      "key": "mbClientSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "foToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "mbToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "conversationId",
+      "value": "postman-push-pull-001",
+      "type": "string"
+    },
+    {
+      "key": "messageId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "fileMessageId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ownConnectorDspUrl",
+      "value": "http://connector-<slug>.dataspace-participants.svc.cluster.local:8082/api/v1/dsp",
+      "type": "string"
+    },
+    {
+      "key": "outboxPollAttempts",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "inboxPollAttempts",
+      "value": "0",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 \u00b7 Tokens & discovery",
+      "description": "Run both token requests first. Everything below inherits the token through the\n`foToken` / `mbToken` variables \u2014 the gateway reads `participant_id` from the JWT\nand proxies to *that* participant's own adapter, so the token alone decides which\nside you are acting as. There is no way to reach another participant's adapter.",
+      "item": [
+        {
+          "name": "Get FO token \u25b8 saves foToken",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/token",
+              "host": [
+                "{{keycloakUrl}}"
+              ],
+              "path": [
+                "realms",
+                "{{realm}}",
+                "protocol",
+                "openid-connect",
+                "token"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{foParticipantId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{foClientSecret}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "Mint the factory owner participant token via Keycloak `client_credentials`.\n\n`client_id` **is** the participant URN \u2014 the Keycloak client is created when the\nparticipant is registered. Get the secret from the management GUI\n(Participants \u2192 Show credentials) or\n`GET {managementUrl}/api/participants/{id}/credentials` with an admin token.\n\nSaves `access_token` into the `foToken` collection variable. Tokens are short-lived\n(~5 min) \u2014 any later 401 means re-run this request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "let body = null;",
+                  "try { body = pm.response.json(); } catch (e) { body = null; }",
+                  "if (body && body.access_token) {",
+                  "    pm.collectionVariables.set('foToken', body.access_token);",
+                  "    console.log('foToken updated (expires_in=' + body.expires_in + 's)');",
+                  "} else {",
+                  "    console.warn('no access_token in the response \u2014 foToken left unchanged');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get MB token \u25b8 saves mbToken",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/token",
+              "host": [
+                "{{keycloakUrl}}"
+              ],
+              "path": [
+                "realms",
+                "{{realm}}",
+                "protocol",
+                "openid-connect",
+                "token"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{mbParticipantId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{mbClientSecret}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "Mint the machine builder participant token via Keycloak `client_credentials`.\n\n`client_id` **is** the participant URN \u2014 the Keycloak client is created when the\nparticipant is registered. Get the secret from the management GUI\n(Participants \u2192 Show credentials) or\n`GET {managementUrl}/api/participants/{id}/credentials` with an admin token.\n\nSaves `access_token` into the `mbToken` collection variable. Tokens are short-lived\n(~5 min) \u2014 any later 401 means re-run this request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "let body = null;",
+                  "try { body = pm.response.json(); } catch (e) { body = null; }",
+                  "if (body && body.access_token) {",
+                  "    pm.collectionVariables.set('mbToken', body.access_token);",
+                  "    console.log('mbToken updated (expires_in=' + body.expires_in + 's)');",
+                  "} else {",
+                  "    console.warn('no access_token in the response \u2014 mbToken left unchanged');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Discover counterparts (optional)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{foToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/participants/compatible",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "participants",
+                "compatible"
+              ]
+            },
+            "description": "Registered participants of the *opposite* type \u2014 what this token holder may\nsend to. Cross-type rule: FO\u2192FO or MB\u2192MB sends are rejected with 403.\n\nPopulates `mbParticipantId` from the first result if that variable is still empty."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const peers = pm.response.json();",
+                  "console.log('compatible peers:\\n' + peers.map(p => p.participant_id + '  (' + p.participant_type + ')').join('\\n'));",
+                  "if (peers.length && !pm.collectionVariables.get('mbParticipantId')) {",
+                  "    pm.collectionVariables.set('mbParticipantId', peers[0].participant_id);",
+                  "    console.log('mbParticipantId set to ' + peers[0].participant_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 \u00b7 Push \u2014 as Factory Owner",
+      "description": "The send side. `POST /outbox/messages` returns **202 immediately** with a\n`message_id`; the EDC negotiation and transfer then run in the background, so poll\n`/status` to confirm the message actually left.\n\nThree content modes, same endpoint family:\n\n| Mode | What the adapter does |\n|---|---|\n| `payload` (inline JSON) | uploads it to the sender's own MinIO, registers an ad-hoc EDC asset, keeps only a `payload_ref` |\n| `content_ref` | nothing \u2014 relays `{asset_id, dsp_url}` as-is; the bytes never touch this adapter |\n| `POST /outbox/files` | bundles the uploaded files into one ZIP and transfers that |\n\nSupplying both `payload` and `content_ref` on one message is rejected as ambiguous (422).\n\nThe payload is never persisted next to the protocol fields \u2014 inline `payload` is a\ncaller convenience, not the storage model.",
+      "item": [
+        {
+          "name": "Send structured payload (inline) \u25b8 saves messageId",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{foToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/outbox/messages",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "outbox",
+                "messages"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"receiver_participant\": \"{{mbParticipantId}}\",\n  \"conversation_id\": \"{{conversationId}}\",\n  \"performative\": \"inform\",\n  \"capability\": \"twin:direct\",\n  \"reply_expected\": false,\n  \"payload\": {\n    \"machine_id\": \"press-line-7\",\n    \"temperature_c\": 82.4,\n    \"pressure_bar\": 14.2,\n    \"status\": \"running\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The ordinary data push. Saves `message_id` into `messageId` for the pull folder.\n\n**Fields**\n\n| Field | Required | Notes |\n|---|---|---|\n| `receiver_participant` | yes | must be the opposite participant type, else 403 |\n| `payload` | \u2014 | any JSON object; delivered verbatim |\n| `performative` | no (`inform`) | `request`, `inform`, `grant`, `deny`, `cancel`, `close`, `reopen`, `escalate`, `deescalate` |\n| `capability` | depends | FO offers `twin:direct` (auto), `twin:adjacents`, `twin:history` (both on-request); MB offers `mb:confidential` |\n| `conversation_id` | no | generated if omitted; reuse it to keep a thread together |\n| `reply_expected` | no (`false`) | hint to the receiver |\n\n**Responses** \u2014 202 `{message_id, status:\"pending\", applied, conversation_state}`.\n422 if the performative's required/forbidden fields are wrong; 409 if the\nconversation is already closed (neither ever reaches EDC).\n\nNote the capability policy layer is **not** enforced on this path \u2014 a `denied`\npolicy does not block the send. Check `GET /capabilities/access?provider=\u2026`\nyourself before sending if that matters to your app."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('messageId', body.message_id);",
+                  "pm.collectionVariables.set('outboxPollAttempts', 0);",
+                  "pm.collectionVariables.set('inboxPollAttempts', 0);",
+                  "console.log('message_id=' + body.message_id + '  status=' + body.status +",
+                  "            '  applied=' + body.applied + '  conversation_state=' + body.conversation_state);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send by asset reference (content_ref)",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{foToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/outbox/messages",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "outbox",
+                "messages"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"receiver_participant\": \"{{mbParticipantId}}\",\n  \"conversation_id\": \"{{conversationId}}\",\n  \"performative\": \"inform\",\n  \"capability\": \"twin:direct\",\n  \"content_ref\": {\n    \"asset_id\": \"asset-{{messageId}}\",\n    \"dsp_url\": \"{{ownConnectorDspUrl}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Bring-your-own-asset push: the content already exists on a connector you\ncontrol, and you hand over only a pointer. No upload happens and no local EDC\nasset is created \u2014 the reference is relayed as-is, and the receiver negotiates\nfor it over standard DSP exactly as for any other message.\n\n`asset_id` defaults here to `asset-{{messageId}}` \u2014 the deterministic id the\nadapter assigns to an inline send \u2014 so this request works right after the\nprevious one without standing up a second connector. Set\n`ownConnectorDspUrl` to the connector that actually holds the asset\n(`http://connector-<slug>.dataspace-participants.svc.cluster.local:8082/api/v1/dsp`\nfor a hosted participant, or your own connector's DSP endpoint if self-hosted).\n\nThe sender's own record afterwards shows `content_ref` set and `payload_ref: null`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('messageId', body.message_id);",
+                  "pm.collectionVariables.set('outboxPollAttempts', 0);",
+                  "pm.collectionVariables.set('inboxPollAttempts', 0);",
+                  "console.log('message_id=' + body.message_id + '  status=' + body.status +",
+                  "            '  applied=' + body.applied + '  conversation_state=' + body.conversation_state);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send files (ZIP bundle) \u25b8 saves fileMessageId",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{foToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/outbox/files",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "outbox",
+                "files"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "receiver_participant",
+                  "value": "{{mbParticipantId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "conversation_id",
+                  "value": "{{conversationId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "performative",
+                  "value": "inform",
+                  "type": "text"
+                },
+                {
+                  "key": "capability",
+                  "value": "twin:direct",
+                  "type": "text"
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "Pick one or more local files \u2014 attach as many as you like under this same key."
+                }
+              ]
+            },
+            "description": "`multipart/form-data` push. The adapter bundles every attached file into a\nsingle ZIP, transfers that over EDC, and the receiver downloads one archive\nregardless of how many files you sent.\n\n**Select files in the `files` row before sending** \u2014 Postman cannot store file\npaths in an exported collection, so the row arrives empty and the request\nfails validation until you pick something.\n\n`performative` (default `inform`), `capability` and `conversation_id` behave\nexactly as on `POST /outbox/messages` \u2014 a file bundle is a normal message whose\ncontent happens to be a ZIP, not a separate performative. The resulting inbox\nentry has `has_files: true`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('fileMessageId', body.message_id);",
+                  "pm.collectionVariables.set('messageId', body.message_id);",
+                  "pm.collectionVariables.set('outboxPollAttempts', 0);",
+                  "pm.collectionVariables.set('inboxPollAttempts', 0);",
+                  "console.log('file message_id=' + body.message_id + '  status=' + body.status);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Poll send status (until notified)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{foToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/outbox/messages/{{messageId}}/status",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "outbox",
+                "messages",
+                "{{messageId}}",
+                "status"
+              ]
+            },
+            "description": "Sender-side lifecycle:\n\n```\npending \u2192 registered \u2192 notified\n                    \u2198 error\nrejected   (terminal \u2014 state-machine violation, never reached EDC)\n```\n\n`notified` is the **terminal success state for the sender** \u2014 the receiver's\nconnector pulls independently, so there is deliberately no \"delivered\" state\nhere. Confirm actual arrival from the receiving side instead.\n\nThe test script re-runs this request until `notified` (max 15 attempts) when\nexecuted in the Collection Runner. Set the Runner's per-request **Delay to\n~2000 ms** so it doesn't hammer the gateway; a single manual Send just reports\nthe current status once."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Postman renamed setNextRequest; support both runtimes.",
+                  "const setNext = (name) => {",
+                  "    if (pm.execution && pm.execution.setNextRequest) { pm.execution.setNextRequest(name); }",
+                  "    else { postman.setNextRequest(name); }",
+                  "};",
+                  "",
+                  "const MAX_POLLS = 15;",
+                  "const counter = 'outboxPollAttempts';",
+                  "const attempts = Number(pm.collectionVariables.get(counter) || 0);",
+                  "let body = null;",
+                  "try { body = pm.response.json(); } catch (e) { body = null; }",
+                  "const status = body && body.status;",
+                  "console.log('attempt ' + (attempts + 1) + ' \u2192 HTTP ' + pm.response.code + ', status=' + status);",
+                  "",
+                  "if (status === 'notified') {",
+                  "    pm.collectionVariables.set(counter, 0);",
+                  "    console.log('sender side complete: notified \u2014 receiver is pulling over the EDC data plane');",
+                  "    console.log('edc_transfer_id=' + body.edc_transfer_id);",
+                  "} else if (status === 'error' || status === 'rejected') {",
+                  "    pm.collectionVariables.set(counter, 0);",
+                  "    console.warn('terminal failure: ' + status + ' \u2014 ' + (body.error_message || 'see the record for details'));",
+                  "} else if (attempts + 1 >= MAX_POLLS) {",
+                  "    pm.collectionVariables.set(counter, 0);",
+                  "    console.warn('gave up after ' + MAX_POLLS + ' polls; last status: ' + status);",
+                  "} else {",
+                  "    pm.collectionVariables.set(counter, attempts + 1);",
+                  "    setNext(pm.info.requestName);   // re-runs this request; Collection Runner only",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get outbox record",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{foToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/outbox/messages/{{messageId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "outbox",
+                "messages",
+                "{{messageId}}"
+              ]
+            },
+            "description": "Full sender-side record: protocol fields plus `payload_ref` / `content_ref` and\nthe EDC ids. Useful to prove the content/protocol split actually happened \u2014\nan inline send shows `payload_ref: \"minio://\u2026\"` with `content_ref: null`, never\nthe payload itself."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 \u00b7 Pull \u2014 as Machine Builder",
+      "description": "The receive side, and it is **polling** \u2014 there is no push, webhook or SSE transport\ntoday (`asyncapi.yaml` models the same message shapes so one could be added later\nwithout changing them).\n\nWhat crosses the protocol layer is only a notification (`message_id`, `asset_id`,\n`provider_dsp_url`, protocol fields) \u2014 never the payload. The receiving adapter\nstores that row immediately (`status: negotiating`), then separately tells its *own*\nEDC connector to pull the bytes into its *own* MinIO (`status: received`). The\n`payload` you read below is composed from those two halves at read time.\n\nTwo things that bite pollers:\n\n- `?status=received` **excludes** messages still `negotiating`, so one empty result\n  does not mean nothing is in flight \u2014 keep polling on a schedule.\n- After ack, the content is purged at `CONTENT_RETENTION_HOURS` (default 1 day) while\n  the metadata row survives `CONTROL_PLANE_RETENTION_HOURS` (default 30 days) \u2014 so an\n  old acked message reads back with an empty `payload` and `has_files: false`. Read\n  the content before you ack it.",
+      "item": [
+        {
+          "name": "List inbox (status=received)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{mbToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/inbox/messages?status=received",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "inbox",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "received"
+                }
+              ]
+            },
+            "description": "Newest first. Drop the `status` query param to see everything including\n`negotiating` (in flight), `acked` and `error`.\n\nEach entry carries `payload`, `performative`, `capability`, `conversation_id`,\n`sender_participant` and `has_files` \u2014 this is the whole worker-loop input:\nlist \u2192 handle \u2192 ack."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const msgs = pm.response.json();",
+                  "console.log(msgs.length + ' message(s) with status=received');",
+                  "msgs.forEach(m => console.log(m.message_id + '  ' + m.performative + '/' + m.capability +",
+                  "                             '  from ' + m.sender_participant + '  has_files=' + m.has_files));",
+                  "if (msgs.length && !pm.collectionVariables.get('messageId')) {",
+                  "    pm.collectionVariables.set('messageId', msgs[0].message_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Poll one message (until received)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{mbToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/inbox/messages/{{messageId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "inbox",
+                "messages",
+                "{{messageId}}"
+              ]
+            },
+            "description": "Fetch one message by id \u2014 `messageId` is set by the push folder, or set it\nyourself to pull something a counterpart sent independently.\n\nExpect **404 for the first second or two**: the row only exists once the\nsender's notification lands. Then `negotiating` \u2192 `received` as this side's own\nEDC pull completes. `payload` is populated once `received`.\n\nSelf-retries up to 15 times in the Collection Runner (set the Runner Delay to\n~2000 ms); a single manual Send reports the current state once."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Postman renamed setNextRequest; support both runtimes.",
+                  "const setNext = (name) => {",
+                  "    if (pm.execution && pm.execution.setNextRequest) { pm.execution.setNextRequest(name); }",
+                  "    else { postman.setNextRequest(name); }",
+                  "};",
+                  "",
+                  "const MAX_POLLS = 15;",
+                  "const counter = 'inboxPollAttempts';",
+                  "const attempts = Number(pm.collectionVariables.get(counter) || 0);",
+                  "let body = null;",
+                  "try { body = pm.response.json(); } catch (e) { body = null; }",
+                  "const status = body && body.status;",
+                  "console.log('attempt ' + (attempts + 1) + ' \u2192 HTTP ' + pm.response.code + ', status=' + status);",
+                  "",
+                  "if (pm.response.code === 200 && status === 'received') {",
+                  "    pm.collectionVariables.set(counter, 0);",
+                  "    console.log('content available');",
+                  "    console.log('payload: ' + JSON.stringify(body.payload));",
+                  "    console.log('has_files=' + body.has_files);",
+                  "} else if (status === 'error' || status === 'rejected') {",
+                  "    pm.collectionVariables.set(counter, 0);",
+                  "    console.warn('terminal failure: ' + status + ' \u2014 ' + (body.error_message || 'see the record for details'));",
+                  "} else if (attempts + 1 >= MAX_POLLS) {",
+                  "    pm.collectionVariables.set(counter, 0);",
+                  "    console.warn('gave up after ' + MAX_POLLS + ' polls; last status: ' + status);",
+                  "} else {",
+                  "    pm.collectionVariables.set(counter, attempts + 1);",
+                  "    setNext(pm.info.requestName);   // re-runs this request; Collection Runner only",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download file bundle",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{mbToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/inbox/messages/{{fileMessageId}}/download",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "inbox",
+                "messages",
+                "{{fileMessageId}}",
+                "download"
+              ]
+            },
+            "description": "Streams the ZIP for a message where `has_files` is true \u2014 400 otherwise.\nComes back as `application/octet-stream` with\n`Content-Disposition: attachment; filename=\"<message_id>.zip\"`.\n\nUse Postman's **Send and Download** (the arrow next to Send) to write it to\ndisk; a plain Send renders the bytes in the response pane instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "console.log('content-type: ' + pm.response.headers.get('Content-Type'));",
+                  "console.log('content-disposition: ' + pm.response.headers.get('Content-Disposition'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Acknowledge message",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{mbToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/inbox/messages/{{messageId}}/ack",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "inbox",
+                "messages",
+                "{{messageId}}",
+                "ack"
+              ]
+            },
+            "description": "Marks the message processed (`status` \u2192 `acked`). Returns **204 No Content** and\nis idempotent.\n\nThis starts the content-retention clock: the MinIO object is purged after\n`CONTENT_RETENTION_HOURS` (default 1 day, or the sender's `expires_at` if set),\nafter which `payload` reads empty and `has_files` reads false. Read and store\nwhat you need **before** acking."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                  "console.log('acked ' + pm.collectionVariables.get('messageId'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

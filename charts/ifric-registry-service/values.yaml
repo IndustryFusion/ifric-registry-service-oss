@@ -46,7 +46,7 @@ env:
   # cases and match this app's own env.constants.ts defaults. 
   # Use ingress value for the Keycloak host if you have an ingress in front of it
   keycloak:
-    url: "https://url/auth"
+    url: "https://dev.industry-fusion.com/auth"
     realm: "dataspace"
     clientId: "ifric"
     adminClientId: "ifric-admin"
@@ -115,7 +115,7 @@ secrets:
   #     fails rather than silently producing a Job that can't authenticate.
   #   keycloak.enabled=false + bootstrap.enabled=false — ignored. Nothing in
   #     this chart talks to that Keycloak's admin API.
-  keycloakAdminPassword: ""
+  keycloakAdminPassword: "MxOSWFapKSKV40o6hY8pNxT9DT7Pk3s8"
   # Name of a pre-existing Secret with keys KEYCLOAK_ADMIN_PASSWORD,
   # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_ADMIN_CLIENT_SECRET, HEDERA_KEY_SECRET,
   # COMPANY_CREATION_API_KEY, and DB_PASSWORD. When set, the values above
@@ -148,7 +148,7 @@ postgres:
     tag: "16"
   auth:
     user: dbreader
-    password: ""
+    password: "yVBJ5XwhE7CNJASdKv5LHpe7jYKYrl4R"
     database: ngb
   service:
     port: 5432
@@ -169,7 +169,7 @@ postgres:
 ingress:
   enabled: true
   className: "nginx"
-  host: ""
+  host: "dev-ifric-oss.industryfusion.org"
   annotations: {}
   tls: []
 
