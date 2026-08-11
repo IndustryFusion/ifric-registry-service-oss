@@ -20,7 +20,12 @@ export interface RegisterAuthDto {
   industry: string;
   company_name: string;
   registration_number: string;
-  company_ifric_id: string;
+  // Assigned by CompanyService.createCompany from the ICID mint response
+  // (urn_id), never by the caller — anything sent here is overwritten before
+  // it is read. Optional so the request contract doesn't demand a value that
+  // has no effect; the property stays on the interface because the service
+  // writes it in place and everything downstream reads it back.
+  company_ifric_id?: string;
   address_1: string;
   city: string;
   country: string;
@@ -28,9 +33,15 @@ export interface RegisterAuthDto {
   admin_name: string;
   position: string;
   email: string;
-  password: string;
   company_size: string;
-  company_category_id?: number;
+  // No `password` here on purpose: Company.password was dropped in
+  // DropLocalAuthColumns1784546767848, and createCompany generates its own
+  // temporary password for the admin's Keycloak account. A caller-supplied
+  // one was silently discarded, so the field is gone rather than misleading.
+  //
+  // No `company_category_id` either: the category is resolved from
+  // company_category by name and recorded on CompanyCategoryMapping, so an id
+  // sent here matched no Company column and was dropped by TypeORM's create().
   company_category: CompanyCategoryName;
   meta_data: Record<string, any>;
   company_domain: string;

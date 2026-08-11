@@ -113,7 +113,7 @@ export class AuthService {
       // Provision the identity in Keycloak — credentials live there, not
       // in this table. company_ifric_id/user_id become Keycloak user
       // attributes, projected into access tokens via a realm protocol
-      // mapper (see README.md).
+      // mapper (see docs/keycloak-setup.md).
       await this.keycloakService.createUser(
         data.user_email,
         data.user_name,

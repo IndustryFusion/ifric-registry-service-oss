@@ -511,7 +511,11 @@ export class CompanyController {
   })
   @Post('create-company')
   @ApiBody({
-    description: 'Details for creating a company',
+    description:
+      'Details for creating a company. company_ifric_id is deliberately ' +
+      'absent: it is minted by ICID during this call and assigned by ' +
+      'CompanyService.createCompany, so anything a caller sends is ' +
+      'overwritten before it is ever read.',
     required: true,
     schema: {
       type: 'object',
@@ -524,10 +528,6 @@ export class CompanyController {
           type: 'string',
           example: 'REG123456',
         },
-        company_ifric_id: {
-          type: 'string',
-          example: 'IFRIC54321',
-        },
         address_1: {
           type: 'string',
           example: '123 Main Street',
@@ -538,7 +538,11 @@ export class CompanyController {
         },
         country: {
           type: 'string',
-          example: 'USA',
+          description:
+            'Full official country name as recognised by the countries-list ' +
+            "package — e.g. 'United States', 'United Kingdom', 'Germany'. " +
+            'Abbreviations and ISO codes are rejected.',
+          example: 'United States',
         },
         zip: {
           type: 'string',
@@ -556,17 +560,9 @@ export class CompanyController {
           type: 'string',
           example: 'admin@example.com',
         },
-        password: {
-          type: 'string',
-          example: 'strongpassword123',
-        },
         company_size: {
           type: 'string',
           example: '100-500',
-        },
-        company_category_id: {
-          type: 'number',
-          example: 1,
         },
         company_category: {
           type: 'string',
@@ -589,7 +585,6 @@ export class CompanyController {
       required: [
         'company_name',
         'registration_number',
-        'company_ifric_id',
         'address_1',
         'city',
         'country',
@@ -597,7 +592,6 @@ export class CompanyController {
         'admin_name',
         'position',
         'email',
-        'password',
         'company_size',
         'company_category',
         'meta_data',
@@ -811,10 +805,6 @@ export class CompanyController {
           type: 'string',
           example: 'REG123456',
         },
-        company_ifric_id: {
-          type: 'string',
-          example: 'IFRIC54321',
-        },
         address_1: {
           type: 'string',
           example: '123 Main Street',
@@ -825,7 +815,11 @@ export class CompanyController {
         },
         country: {
           type: 'string',
-          example: 'USA',
+          description:
+            'Full official country name as recognised by the countries-list ' +
+            "package — e.g. 'United States', 'United Kingdom', 'Germany'. " +
+            'Abbreviations and ISO codes are rejected.',
+          example: 'United States',
         },
         zip: {
           type: 'string',
@@ -843,17 +837,9 @@ export class CompanyController {
           type: 'string',
           example: 'admin@example.com',
         },
-        password: {
-          type: 'string',
-          example: 'strongpassword123',
-        },
         company_size: {
           type: 'string',
           example: '100-500',
-        },
-        company_category_id: {
-          type: 'number',
-          example: 1,
         },
         company_category: {
           type: 'string',
@@ -876,7 +862,6 @@ export class CompanyController {
       required: [
         'company_name',
         'registration_number',
-        'company_ifric_id',
         'address_1',
         'city',
         'country',
@@ -884,7 +869,6 @@ export class CompanyController {
         'admin_name',
         'position',
         'email',
-        'password',
         'company_size',
         'company_category',
         'meta_data',

@@ -61,8 +61,9 @@ Docker Compose (`docker-compose.yaml` at repo root) starts PostgreSQL +
 Keycloak + a one-shot `migrate` service (applies TypeORM migrations,
 idempotent) + the app; `docker compose up --build` reads `backend/.env`.
 Keycloak comes up unconfigured — the backend crash-loops on its fail-fast
-env check until a one-time manual realm/client setup is done (see root
-README.md's "Running with Docker").
+env check until a one-time manual realm/client setup is done (steps:
+`docs/keycloak-first-time-checklist.md`; rationale:
+`docs/keycloak-setup.md`).
 
 ### Environment
 
@@ -222,8 +223,9 @@ themselves; every credential operation goes through `KeycloakService`
 (migration `DropLocalAuthColumns1784546767848`) — don't reintroduce them;
 credentials and session state live in Keycloak, not this database. Both
 Keycloak clients (`ifric`, `ifric-admin`) must already exist in the target
-realm — this app never provisions them; it's a one-time manual step (see
-root README.md's "Running with Docker"/"Deploying with Helm").
+realm — this app never provisions them; it's a one-time manual step (steps:
+`docs/keycloak-first-time-checklist.md`; rationale:
+`docs/keycloak-setup.md`).
 
 ### Keycloak integration
 

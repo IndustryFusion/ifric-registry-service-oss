@@ -1,4 +1,15 @@
 {{- if .Values.ingress.enabled }}
+{{/*
+Everything below is derived from values — nothing about this Ingress needs
+hand-editing after `helm install`. The two meta.helm.sh/release-* annotations
+you see on the live object are added by Helm itself at apply time; templating
+them here would fight Helm's own ownership bookkeeping.
+
+The nginx shape (rewrite-target + a capturing path + ImplementationSpecific)
+only makes sense together, so it is switched on as a unit by
+ingress.className=nginx rather than by three separate knobs. Any other class
+gets the portable "/" Prefix form.
+*/}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -6,24 +17,50 @@ metadata:
   labels:
     {{- include "ifric-registry-service.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
-  {{- with .Values.ingress.annotations }}
   annotations:
+    {{- if .Values.ingress.className }}
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- end }}
+    {{- if eq .Values.ingress.className "nginx" }}
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+    {{- end }}
+    {{- if .Values.certManager.enabled }}
+    cert-manager.io/cluster-issuer: {{ required "certManager.clusterIssuer is required when certManager.enabled=true — set it to the name of a ClusterIssuer that already exists in this cluster" .Values.certManager.clusterIssuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
   {{- end }}
-  {{- with .Values.ingress.tls }}
+  {{- if .Values.ingress.tls }}
+  {{- /* An explicit list wins outright — bring your own certificate. */}}
   tls:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml .Values.ingress.tls | nindent 4 }}
+  {{- else if .Values.certManager.enabled }}
+  {{- /*
+    cert-manager's ingress-shim only issues for an Ingress carrying BOTH the
+    cluster-issuer annotation above and a tls block naming a secret — the
+    annotation alone does nothing. The Secret is created by cert-manager once
+    the challenge completes, so it does not have to exist beforehand.
+  */}}
+  tls:
+    - hosts:
+        - {{ required "ingress.host is required when ingress.enabled=true" .Values.ingress.host | quote }}
+      secretName: {{ include "ifric-registry-service.fullname" . }}-backend-tls
   {{- end }}
   rules:
     - host: {{ required "ingress.host is required when ingress.enabled=true" .Values.ingress.host | quote }}
       http:
         paths:
+          {{- if eq .Values.ingress.className "nginx" }}
+          - path: /(.*)
+            pathType: ImplementationSpecific
+          {{- else }}
           - path: /
             pathType: Prefix
+          {{- end }}
             backend:
               service:
                 name: {{ include "ifric-registry-service.fullname" . }}-backend

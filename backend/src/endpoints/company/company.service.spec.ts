@@ -17,7 +17,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { KeycloakService } from '../auth/keycloak.service';
-import { HttpException } from '@nestjs/common';
+import { HttpException, HttpStatus } from '@nestjs/common';
 import axios from 'axios';
 import { CompanyService } from './company.service';
 import {
@@ -638,7 +638,6 @@ describe('CompanyService', () => {
       admin_name: 'Admin Person',
       position: 'CEO',
       email: 'admin@acme.example',
-      password: '',
       company_size: '10-50',
       company_category: 'manufacturer',
       meta_data: {},
@@ -670,6 +669,18 @@ describe('CompanyService', () => {
           return Promise.resolve(null);
         },
       );
+    });
+
+    it('rejects an unrecognised country with 400 instead of crashing', async () => {
+      await expect(
+        service.createCompany({ ...baseDto, country: 'USA' }),
+      ).rejects.toMatchObject({
+        status: HttpStatus.BAD_REQUEST,
+      });
+
+      // The ICID mint must not have been attempted for a request that could
+      // never have produced a region code.
+      expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('returns company_ifric_id in the success response', async () => {
@@ -774,6 +785,23 @@ describe('CompanyService', () => {
         authorizedUser,
         'update',
       );
+    });
+
+    it('never writes company_ifric_id from the request body', async () => {
+      await service.updateCompany(
+        'urn:ifric:company-1',
+        {
+          company_name: 'Renamed Co',
+          company_ifric_id: 'urn:ifric:someone-elses-company',
+          company_category_id: 7,
+        } as unknown as RegisterAuthDto,
+        authorizedUser,
+      );
+
+      const [, payload] = companyRepository.update.mock.calls[0];
+      expect(payload).not.toHaveProperty('company_ifric_id');
+      expect(payload).not.toHaveProperty('company_category_id');
+      expect(payload).toMatchObject({ company_name: 'Renamed Co' });
     });
 
     it('re-points an existing category mapping when company_category changes', async () => {

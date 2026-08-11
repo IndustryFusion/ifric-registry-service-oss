@@ -38,7 +38,8 @@ data:
   # ICID_SERVICE_BACKEND_URL, there's no safe way to require them upfront:
   # the confidential "ifric"/"ifric-admin" clients only exist once someone
   # has completed the one-time manual realm setup against this release's
-  # own just-deployed Keycloak (see README.md), which is only possible
+  # own just-deployed Keycloak (see this chart's README.md, "Keycloak"),
+  # which is only possible
   # after `helm install` has already brought Keycloak up. Leave them blank
   # on first install; the backend Pod will crash-loop on its own
   # env.constants.ts fail-fast check until you `helm upgrade` with the

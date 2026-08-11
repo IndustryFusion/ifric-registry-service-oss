@@ -23,7 +23,8 @@ services:
   # client with Direct Access Grants enabled, and a confidential
   # "ifric-admin" client with its service account granted the
   # realm-management client's "manage-users" role) is a one-time MANUAL
-  # step via the admin console at http://localhost:8080 — see README.md.
+  # step via the admin console at http://localhost:8080 — follow
+  # docs/keycloak-first-time-checklist.md.
   # Not for production: hardcoded admin console credentials below.
   # KC_DB points at this same Postgres instance/database — Keycloak
   # namespaces its own tables, so there's no collision with this app's

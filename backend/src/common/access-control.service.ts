@@ -28,7 +28,8 @@ export type Permission = 'create' | 'read' | 'update' | 'delete';
 /**
  * Enforces the two checks every company-scoped endpoint needs, using the
  * company_ifric_id/user_id claims a Keycloak protocol mapper projects onto
- * the access token (see README.md) instead of trusting body-supplied ids:
+ * the access token (see docs/keycloak-setup.md) instead of trusting
+ * body-supplied ids:
  *   1. the caller's own company matches the company they're acting on
  *   2. the caller's one AccessGroup role (via UserAccessGroup) actually
  *      grants the permission being exercised

@@ -41,7 +41,8 @@ interface KeycloakTokenResponse {
  * realm-management client's manage-users role) — kept separate so a leaked
  * end-user-facing client secret can't also manage the realm's users. Both
  * clients must already exist in the target realm (one-time manual setup,
- * see README.md) — this service does not provision them.
+ * see docs/keycloak-first-time-checklist.md) — this service does not
+ * provision them.
  */
 @Injectable()
 export class KeycloakService {

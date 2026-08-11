@@ -10,8 +10,10 @@
 #   curl -X POST http://localhost:4010/script   # seed ICID's taxonomy (once)
 #   curl -X POST http://localhost:4007/script   # seed this service's RBAC/categories (once)
 #
-# See README.md "Running with Docker" for details, including why
-# COMPANY_DEFAULT_CODE must be exactly IFX-COM-NAP and what to do if your
+# Keycloak comes up unconfigured — do the one-time realm/client setup in
+# docs/keycloak-first-time-checklist.md or this stack won't authenticate.
+# README.md's "ICID Dependency" covers why COMPANY_DEFAULT_CODE must be
+# exactly IFX-COM-NAP; docs/local-development.md covers what to do if your
 # Docker daemon blocks build-time network access.
 #
 services:
@@ -80,7 +82,8 @@ services:
   # Direct Access Grants enabled, and a confidential "ifric-admin" client
   # with its service account granted the realm-management client's
   # "manage-users" role) is a one-time MANUAL step via the admin console
-  # at http://localhost:8080 — see README.md. Not for production:
+  # at http://localhost:8080 — follow docs/keycloak-first-time-checklist.md.
+  # Not for production:
   # hardcoded admin console credentials below. KC_DB points at this same
   # Postgres instance/database — Keycloak namespaces its own tables, so
   # there's no collision with this app's tables, and it avoids standing up
@@ -191,8 +194,8 @@ services:
       - HEDERA_KEY_SECRET=${HEDERA_KEY_SECRET:-dev-only-hedera-key-32-bytes-min}
       # Must match an object-type/subtype pair already seeded in ICID (its
       # own POST /script seeds object_type "COM" with subtype "NAP" for
-      # companies, case-sensitive) — see README "Running with Docker" for
-      # how this was confirmed.
+      # companies, case-sensitive) — confirmed against ICID's actual seed
+      # data, see README.md's "ICID Dependency".
       - COMPANY_DEFAULT_CODE=IFX-COM-NAP
       # Placeholder gate for POST /company/create-company ahead of the real
       # external-API-token flow — see backend/.env.example. Safe to
@@ -200,7 +203,8 @@ services:
       # throwaway local-dev value, not an external system's real secret.
       - COMPANY_CREATION_API_KEY=${COMPANY_CREATION_API_KEY:-dev-only-company-creation-key}
       # Keycloak realm/client setup is a one-time MANUAL step (admin
-      # console at http://localhost:8080 — see README.md), so unlike
+      # console at http://localhost:8080 — see
+      # docs/keycloak-first-time-checklist.md), so unlike
       # JWT_SECRET/HEDERA_KEY_SECRET above these have no safe generated
       # default. Left blank until you've done that setup, this container
       # will crash-loop on env.constants.ts's fail-fast check — bring the

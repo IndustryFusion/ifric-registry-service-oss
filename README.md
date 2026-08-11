@@ -89,8 +89,14 @@ signs a JWT itself. Two Keycloak clients are involved:
 
 Both clients, plus two protocol mappers on `ifric`, must already exist in
 the target realm — this is a one-time manual step (the app fails fast at
-boot without them). Full walkthrough, for both local Docker and
-Kubernetes: [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
+boot without them):
+
+- **Doing it:** [`docs/keycloak-first-time-checklist.md`](docs/keycloak-first-time-checklist.md)
+  — click-by-click admin-console steps, for both local Docker and
+  Kubernetes, ending in a verification you can run.
+- **Understanding it:** [`docs/keycloak-setup.md`](docs/keycloak-setup.md)
+  — the same setup with the reasoning, the two realm defaults that break it
+  silently, and how the claims are enforced at request time.
 
 **Getting and using a token:** RBAC in this app is **one `AccessGroup` role
 per user per company** — no per-product dimension. Login just needs
@@ -266,7 +272,7 @@ docker compose up --build
 
 This starts everything, but Keycloak comes up unconfigured, so the backend
 will crash-loop until you finish the one-time setup in
-[`docs/keycloak-setup.md`](docs/keycloak-setup.md).
+[`docs/keycloak-first-time-checklist.md`](docs/keycloak-first-time-checklist.md).
 
 **Prefer running the app natively?** Keep Postgres + Keycloak in Docker and
 run the backend yourself for faster reload:
@@ -304,7 +310,7 @@ troubleshooting, and migration notes:
   ```
 - Backend crash-looping right after first boot is almost always the
   Keycloak manual setup not being done yet — see
-  [`docs/keycloak-setup.md`](docs/keycloak-setup.md).
+  [`docs/keycloak-first-time-checklist.md`](docs/keycloak-first-time-checklist.md).
 
 ## License
 

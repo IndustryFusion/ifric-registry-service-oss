@@ -189,14 +189,27 @@ env:
     realm: ifric
 ```
 
+That admin needs realm-creation rights on that instance.
+`secrets.keycloakAdminPassword` is **required** in this combination and the
+render fails without it — unlike the bundled case, where the generated
+password is what creates the admin account, here there is nothing to
+generate: a random value would be one that Keycloak has never heard of, and
+the Job would spend five minutes retrying before failing on authentication.
+
+The two **client** secrets still need nothing from you — the Job pushes
+them onto the clients it creates in your realm, exactly as it does for a
+bundled Keycloak.
+
 ### Manual
 
 Use `keycloak.bootstrap.enabled=false` when the Keycloak belongs to another
 team, or you want to own the realm yourself.
 
-1. Follow [`docs/keycloak-setup.md`](../../docs/keycloak-setup.md) — same
-   objects as the table above, **including the two realm settings**, which
-   are easy to miss and fail confusingly.
+1. Follow [`docs/keycloak-first-time-checklist.md`](../../docs/keycloak-first-time-checklist.md)
+   — the same objects as the table above, as click-by-click steps,
+   **including the two realm settings**, which are easy to miss and fail
+   confusingly. Why each one matters:
+   [`docs/keycloak-setup.md`](../../docs/keycloak-setup.md).
 2. Copy both client secrets from the admin console.
 3. Supply them — nothing generates them in this mode:
 
@@ -296,7 +309,7 @@ rotate them out from under you.
 |---|---|---|
 | `secrets.keycloakClientSecret` | generated | only with bootstrap on; otherwise you must supply it |
 | `secrets.keycloakAdminClientSecret` | generated | same |
-| `secrets.keycloakAdminPassword` | generated | Keycloak's admin login. External Keycloak + bootstrap on → set it to *that* instance's password |
+| `secrets.keycloakAdminPassword` | generated | Keycloak's admin login. Bundled Keycloak: generated, and that value *is* the admin account the chart creates. External Keycloak + bootstrap on: **required** — set it to that instance's real password, or the render fails |
 | `secrets.companyCreationApiKey` | generated | `X-API-Key` gate on `POST /company/create-company` |
 | `secrets.hederaKeySecret` | `""` | optional — blank disables `/certificate/*` entirely |
 | `postgres.auth.password` | `ifric` | provisions the bundled Postgres; must *match* an external one |
@@ -321,6 +334,9 @@ Full list with comments in `values.yaml`; mirrors `backend/.env.example`.
 | `seed.enabled` | `true` | both seed Jobs |
 | `env.companyDefaultCode` | `IFX-COM-NAP` | must match an object-type/sub-type pair seeded in your ICID — compared case-sensitively |
 | `ingress.enabled` | `false` | needs `ingress.host` |
+| `ingress.className` | `""` | `nginx` also emits `rewrite-target: /$1` and switches the rule to the `/(.*)` + `ImplementationSpecific` form |
+| `certManager.enabled` | `false` | `true` needs `certManager.clusterIssuer`; adds the cluster-issuer annotation **and** the `tls` block cert-manager requires |
+| `certManager.clusterIssuer` | `""` | name of a ClusterIssuer that already exists in the cluster |
 
 ---
 

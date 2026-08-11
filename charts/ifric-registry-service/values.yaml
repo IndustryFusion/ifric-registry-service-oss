@@ -43,10 +43,11 @@ env:
   # keycloak.enabled=false (point at a real, reachable Keycloak instance);
   # ignored when keycloak.enabled=true (default), where the chart computes
   # the in-cluster URL/realm itself. clientId/adminClientId apply in both
-  # cases and match this app's own env.constants.ts defaults.
+  # cases and match this app's own env.constants.ts defaults. 
+  # Use ingress value for the Keycloak host if you have an ingress in front of it
   keycloak:
-    url: "http://keycloak-service.iff.svc.cluster.local:8080"
-    realm: "ifric"
+    url: "https://url/auth"
+    realm: "dataspace"
     clientId: "ifric"
     adminClientId: "ifric-admin"
   # Enables TLS on this app's connection to Postgres. The backend itself
@@ -98,13 +99,22 @@ secrets:
   # auto-generates one on first install and reuses it on every later
   # `helm upgrade` — same pattern as keycloakAdminPassword below.
   companyCreationApiKey: ""
-  # Optional — Keycloak's own admin-console login password for this
-  # release's bundled instance (only relevant when keycloak.enabled=true).
-  # Leave blank and the chart generates a random one on first install, then
-  # reuses that same value on every subsequent `helm upgrade` (via `lookup`
-  # against the already-deployed Secret), so upgrades never lock you out of
-  # the console. Only relevant with the bundled Keycloak — ignored when
-  # keycloak.enabled=false.
+  # Keycloak's own admin-console login password. Whether you have to set it
+  # depends on the topology:
+  #
+  #   keycloak.enabled=true (bundled) — optional. Leave blank and the chart
+  #     generates one on first install, hands it to the Keycloak Deployment
+  #     as the admin account it creates, and reuses that same value on every
+  #     later `helm upgrade` (via `lookup` against the already-deployed
+  #     Secret), so upgrades never lock you out of the console.
+  #   keycloak.enabled=false + bootstrap.enabled=true — REQUIRED. Set it to
+  #     that external instance's real admin password (see keycloak.adminUser
+  #     for the username): the bootstrap Job signs in with these to create
+  #     the realm and clients there. Nothing can be generated here — a
+  #     random value is one that Keycloak has never heard of — so the render
+  #     fails rather than silently producing a Job that can't authenticate.
+  #   keycloak.enabled=false + bootstrap.enabled=false — ignored. Nothing in
+  #     this chart talks to that Keycloak's admin API.
   keycloakAdminPassword: ""
   # Name of a pre-existing Secret with keys KEYCLOAK_ADMIN_PASSWORD,
   # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_ADMIN_CLIENT_SECRET, HEDERA_KEY_SECRET,
@@ -147,12 +157,31 @@ postgres:
     size: 1Gi
     storageClassName: ""
 
+# Public ingress for the backend Service. enabled=true requires `host`.
+# className drives both spec.ingressClassName and the legacy
+# kubernetes.io/ingress.class annotation (same value, so they can't
+# disagree); setting it to "nginx" additionally emits the
+# rewrite-target: /$1 annotation and switches the rule to the
+# `/(.*)` + ImplementationSpecific form nginx needs for that rewrite.
+# `annotations` is merged in last, for anything not covered here.
+# `tls` is an escape hatch for a certificate you manage yourself — leave
+# it empty and let certManager below generate the block instead.
 ingress:
-  enabled: false
-  className: ""
+  enabled: true
+  className: "nginx"
   host: ""
   annotations: {}
   tls: []
+
+# TLS via cert-manager for the ingress above. Off, the ingress stays
+# HTTP-only. On, clusterIssuer must name a ClusterIssuer that already
+# exists in the cluster (`kubectl get clusterissuer`) — the render fails
+# otherwise rather than emitting an Ingress that silently never gets a
+# certificate. cert-manager then issues into <fullname>-backend-tls,
+# a Secret it creates itself. Ignored entirely when ingress.enabled=false.
+certManager:
+  enabled: true
+  clusterIssuer: "letsencrypt-prod"
 
 # ICID (https://github.com/IndustryFusion/icidservice) — a separate
 # open-source service that mints company_ifric_id and issues/verifies

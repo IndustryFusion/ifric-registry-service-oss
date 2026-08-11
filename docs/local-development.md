@@ -47,8 +47,8 @@ manual `docker build` of the standalone image above.
 
 **Backend crash-loops after `docker compose up`.** Expected on first run —
 Keycloak comes up unconfigured. Finish the one-time setup in
-[`docs/keycloak-setup.md`](keycloak-setup.md), then bring the stack up
-again.
+[`docs/keycloak-first-time-checklist.md`](keycloak-first-time-checklist.md),
+then bring the stack up again.
 
 **Migrations vs. schema drift.** This app never applies migrations itself
 (`synchronize: false` always) — `npm run migration:run` (or the

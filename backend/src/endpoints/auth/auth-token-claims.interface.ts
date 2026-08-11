@@ -16,7 +16,8 @@
 
 // The decoded Keycloak access token payload AuthGuard attaches to
 // request.user. company_ifric_id/user_id are projected from Keycloak user
-// attributes via a realm protocol mapper (see README.md) — optional because
+// attributes via a realm protocol mapper (see docs/keycloak-setup.md) —
+// optional because
 // a token issued before that migration (or before the backfill script runs
 // for a given user) simply won't carry them; callers must treat a missing
 // value as "unauthorized", not as an implicit bypass (see

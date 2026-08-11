@@ -78,9 +78,28 @@ data:
     #    still answers 201 — the attributes just aren't there afterwards,
     #    the protocol mappers below then map nothing, and every
     #    company-scoped endpoint 403s on a token that looks fine.
-    kc update users/profile -r "${KEYCLOAK_REALM}" \
-      -s unmanagedAttributePolicy=ENABLED
-    echo "==> Realm user profile: unmanaged attributes enabled"
+    #
+    #    Pre-24 servers reject unmanagedAttributePolicy as an unknown field
+    #    (UPConfig only had groups/attributes), which is not a failure to
+    #    recover from: those versions store unknown user attributes anyway,
+    #    so there is no policy to set and nothing for this app to worry
+    #    about. Tolerate exactly that error and nothing else — a real
+    #    failure here has to stay fatal, since silently skipping it is what
+    #    produces the 403-on-a-valid-token symptom above.
+    if profile_err="$(kc update users/profile -r "${KEYCLOAK_REALM}" \
+                        -s unmanagedAttributePolicy=ENABLED 2>&1)"; then
+      echo "==> Realm user profile: unmanaged attributes enabled"
+    elif echo "${profile_err}" | grep -q 'Unrecognized field "unmanagedAttributePolicy"'; then
+      echo "==> Realm user profile: this Keycloak predates 24 and has no"
+      echo "    unmanaged-attribute policy — it stores unknown user attributes"
+      echo "    by default, so there is nothing to set. Continuing."
+    else
+      echo "!! Could not set the unmanaged-attribute policy on realm '${KEYCLOAK_REALM}':"
+      echo "${profile_err}"
+      echo "   Without it, Keycloak 24+ silently drops company_ifric_id/user_id"
+      echo "   and every company-scoped endpoint returns 403 on a valid token."
+      exit 1
+    fi
 
     # 2. VERIFY_PROFILE requires firstName AND lastName. KeycloakService's
     #    createUser sets only firstName (this app collects one name), so
@@ -88,9 +107,22 @@ data:
     #    up" and the password grant would fail with invalid_grant. There is
     #    no browser flow here to complete a profile in — logins are ROPC —
     #    so the action can only ever block, never resolve.
-    kc update authentication/required-actions/VERIFY_PROFILE -r "${KEYCLOAK_REALM}" \
-      -s enabled=false
-    echo "==> Realm required action VERIFY_PROFILE disabled"
+    #    Old enough servers don't register this required action at all, in
+    #    which case there is likewise nothing to disable. Anything else is
+    #    fatal for the same reason as above.
+    if vp_err="$(kc update authentication/required-actions/VERIFY_PROFILE \
+                   -r "${KEYCLOAK_REALM}" -s enabled=false 2>&1)"; then
+      echo "==> Realm required action VERIFY_PROFILE disabled"
+    elif echo "${vp_err}" | grep -qi "404\|not found"; then
+      echo "==> Realm required action VERIFY_PROFILE not registered on this"
+      echo "    Keycloak — nothing to disable. Continuing."
+    else
+      echo "!! Could not disable the VERIFY_PROFILE required action on realm '${KEYCLOAK_REALM}':"
+      echo "${vp_err}"
+      echo "   Left enabled, every user this app creates is stuck at"
+      echo "   'Account is not fully set up' and login fails with invalid_grant."
+      exit 1
+    fi
 
     # Resolves a client's internal UUID (which every sub-resource path
     # needs) from its human clientId. Empty output means "not there".

@@ -37,7 +37,8 @@ if (!process.env.DB_NAME) {
 // (create/reset-password/delete users) — kept separate from "ifric" so a
 // leaked end-user-facing client secret doesn't also grant realm-wide user
 // management. Both clients must already exist in the target realm — this
-// app does not provision them (one-time manual setup, see README.md).
+// app does not provision them (one-time manual setup, see
+// docs/keycloak-first-time-checklist.md).
 if (!process.env.KEYCLOAK_URL) {
   throw new Error('KEYCLOAK_URL environment variable is required');
 }

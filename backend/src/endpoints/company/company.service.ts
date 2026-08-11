@@ -333,11 +333,23 @@ export class CompanyService {
       }
 
       // Fetch IFRIC ID From icid-service
+      //
+      // getCountryCode matches full official names only — no ISO codes, no
+      // abbreviations, and case-sensitively — returning `false` for anything
+      // else. Unguarded, that `false` reaches countries[undefined] and the
+      // caller sees "Cannot read properties of undefined (reading
+      // 'continent')" as a 500, which says nothing about which field was
+      // wrong. A bad country is a caller error, so answer 400 and name it.
       const countryCode = getCountryCode(data.country);
-      const countryKey = Object.keys(countries).find(
-        (key) => key == countryCode,
-      );
-      const regionCode = countries[countryKey].continent;
+      if (!countryCode || !countries[countryCode]) {
+        throw new HttpException(
+          `Unknown country "${data.country}". Use the full official name, ` +
+            `e.g. "United States", "United Kingdom", "Germany" — ISO codes ` +
+            `and abbreviations such as "USA" or "DE" are not accepted.`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      const regionCode = countries[countryCode].continent;
       const companyCodeArr = this.company_default_code.split('-');
       const ifricResponse = await axios.post(
         `${this.icidUrl}/company`,
@@ -450,7 +462,8 @@ export class CompanyService {
       // Provision the identity in Keycloak — credentials live there, not
       // in this table. company_ifric_id/user_id are stored as Keycloak user
       // attributes and projected into access tokens via a realm protocol
-      // mapper (see README.md), so every company-scoped endpoint can check
+      // mapper (see docs/keycloak-setup.md), so every company-scoped
+      // endpoint can check
       // the caller's own company/user against the request instead of
       // trusting body-supplied ids.
       await this.keycloakService.createUser(
@@ -1365,9 +1378,21 @@ export class CompanyService {
         }
       }
 
+      // company_ifric_id is ICID-minted and is this tenant's identity: it is
+      // what the access token's claim is matched against, and what the
+      // dataspace's participant_id is a verbatim copy of. Letting it through
+      // this blind pass-through would let a caller rename their own company
+      // out from under their users' tokens, collide with another company's
+      // id, and desync from ICID — so strip it rather than trust the body.
+      // company_category_id goes too: the category is repointed above via
+      // CompanyCategoryMapping, and it matches no Company column anyway.
+      const updatable = { ...(data as any) };
+      delete updatable.company_ifric_id;
+      delete updatable.company_category_id;
+
       await this.companyRepository.update(
         { _id: companyData[0]._id },
-        data as any,
+        updatable,
       );
       return {
         status: 204,

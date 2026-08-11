@@ -61,27 +61,15 @@ paths:
                 user_email:
                   type: string
                   example: johndoe@example.com
-                products:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      product_name:
-                        type: string
-                        example: ProductA
-                      product_version:
-                        type: string
-                        example: v1.0
-                  example:
-                    - product_name: ProductA
-                      product_version: v1.0
-                    - product_name: ProductB
-                      product_version: v2.1
+                user_role:
+                  type: string
+                  example: admin
+                  description: Access group name (matches AccessGroup.group_name)
               required:
                 - company_ifric_id
                 - user_name
                 - user_email
-                - products
+                - user_role
       responses:
         '201':
           description: ''
@@ -107,13 +95,9 @@ paths:
                 password:
                   type: string
                   example: securepassword123
-                product_name:
-                  type: string
-                  example: Product A
               required:
                 - email
                 - password
-                - product_name
       responses:
         '201':
           description: ''
@@ -137,17 +121,12 @@ paths:
                   type: string
                   example: user@example.com
                   description: The email of the user
-                product_name:
-                  type: string
-                  example: Product A
-                  description: The name of the product
                 company_id:
                   type: string
                   example: COMPANY_ID_123
                   description: The unique ID of the company
               required:
                 - email
-                - product_name
                 - company_id
       responses:
         '201':
@@ -321,27 +300,6 @@ paths:
         - access-token: []
       tags:
         - Auth
-  /auth/get-user-specific-product-access:
-    get:
-      operationId: AuthController_getUserSpecificProductAccess
-      parameters:
-        - name: product_name
-          required: true
-          in: query
-          schema:
-            type: string
-        - name: user_id
-          required: true
-          in: query
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Auth
   /auth/check-company-admin/{email}:
     get:
       operationId: AuthController_checkCompanyAdmin
@@ -404,25 +362,18 @@ paths:
             type: string
       requestBody:
         required: true
-        description: For each entry, grants the user (CompanyUser :id) the named access group role on the named product
+        description: Grants the user (CompanyUser :id) the named access group role.
         content:
           application/json:
             schema:
-              type: array
-              items:
-                type: object
-                properties:
-                  product:
-                    type: string
-                    example: Software
-                    description: Product name
-                  user_role:
-                    type: string
-                    example: admin
-                    description: Access group name (matches AccessGroup.group_name)
-                required:
-                  - product
-                  - user_role
+              type: object
+              properties:
+                user_role:
+                  type: string
+                  example: admin
+                  description: Access group name (matches AccessGroup.group_name)
+              required:
+                - user_role
       responses:
         '200':
           description: ''
@@ -610,7 +561,7 @@ paths:
         - Auth
   /company/factories:
     get:
-      description: Returns every known factory. Pass owner_company_ifric_id to filter to just the factories owned by that company (the same id returned as company_ifric_id by /company/owners/:id and /company/factories/:id/owner).
+      description: Pass owner_company_ifric_id to filter to just the factories owned by that company (required to be your own company — this is not a cross-company directory). Omitting it lists every factory across every company.
       operationId: CompanyController_getFactories
       parameters:
         - name: owner_company_ifric_id
@@ -683,7 +634,6 @@ paths:
         - Company
   /company/factories/{id}:
     get:
-      description: Returns the physical factory location for a factory id, the same object shape as /company/factory-locations/:id but looked up directly by factory id rather than via a product URN.
       operationId: CompanyController_getFactoryById
       parameters:
         - name: id
@@ -721,7 +671,7 @@ paths:
       tags:
         - Company
     delete:
-      description: Deletes a factory. Fails with 409 if any company twin still references this factory_id.
+      description: Deletes a factory. Fails with 409 if any asset still references this factory_id.
       operationId: CompanyController_deleteFactory
       parameters:
         - name: id
@@ -741,7 +691,6 @@ paths:
         - Company
   /company/factories/{id}/owner:
     get:
-      description: Resolves a factory id to its owner_company_ifric_id and returns the full owner company object, the same schema as /company/owners/:id and /company/products/:id.
       operationId: CompanyController_getFactoryOwner
       parameters:
         - name: id
@@ -761,7 +710,7 @@ paths:
         - Company
   /company/factories/{id}/products:
     get:
-      description: Returns every product URN whose factory location (per /company/factory-locations/:id) resolves to this factory id. Pass any of the returned URNs to /company/products/:id to get that product's manufacturer.
+      description: Returns every asset URN (see GET /company/assets/*) whose factory_id resolves to this factory id.
       operationId: CompanyController_getFactoryProducts
       parameters:
         - name: id
@@ -776,7 +725,257 @@ paths:
           description: ''
       security:
         - access-token: []
-      summary: Get all product URNs located at a factory id
+      summary: Get all asset URNs located at a factory id
+      tags:
+        - Company
+  /company/assets:
+    post:
+      description: company_ifric_id is the registering/manufacturer company (always required). Provide owner_company_ifric_id (+ optionally factory_id) now to create it already "twinned", or add them later via PATCH.
+      operationId: CompanyController_createAsset
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - asset_ifric_id
+                - company_ifric_id
+              properties:
+                asset_ifric_id:
+                  type: string
+                  example: urn:asset:alpha-machine-001
+                company_ifric_id:
+                  type: string
+                  example: urn:ifric:ifx-eur-com-own-42ced491-b35d-41f7-9949-fcbb5fa4dcd9
+                owner_company_ifric_id:
+                  type: string
+                factory_id:
+                  type: string
+      responses:
+        '201':
+          description: ''
+      security:
+        - access-token: []
+      summary: Create an asset
+      tags:
+        - Company
+    get:
+      operationId: CompanyController_getAssets
+      parameters:
+        - name: company_ifric_id
+          required: true
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/{id}:
+    patch:
+      operationId: CompanyController_updateAsset
+      parameters:
+        - name: id
+          required: true
+          in: path
+          description: Asset URN (asset_ifric_id)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Update an asset — setting owner_company_ifric_id "twins" it
+      tags:
+        - Company
+    delete:
+      operationId: CompanyController_deleteAsset
+      parameters:
+        - name: id
+          required: true
+          in: path
+          description: Asset URN (asset_ifric_id)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+    get:
+      operationId: CompanyController_getAssetByAssetIfricId
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/bulk:
+    delete:
+      operationId: CompanyController_deleteAssets
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/manufacturer/{company_ifric_id}:
+    get:
+      operationId: CompanyController_getManufacturerAssets
+      parameters:
+        - name: company_ifric_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/owner/{company_ifric_id}:
+    get:
+      operationId: CompanyController_getOwnerAssets
+      parameters:
+        - name: company_ifric_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/manufacturer/{manufacturer_company_ifric_id}/owner/{owner_company_ifric_id}:
+    get:
+      operationId: CompanyController_getManufacturerOwnerAssets
+      parameters:
+        - name: manufacturer_company_ifric_id
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: owner_company_ifric_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/count:
+    get:
+      operationId: CompanyController_getAssetCount
+      parameters:
+        - name: asset_ifric_ids
+          required: true
+          in: query
+          description: Comma-separated asset URNs
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/count/{company_ifric_id}:
+    get:
+      operationId: CompanyController_getAssetCountByCompany
+      parameters:
+        - name: company_ifric_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/{id}/manufacturer:
+    get:
+      operationId: CompanyController_getAssetManufacturer
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/{id}/owner:
+    get:
+      operationId: CompanyController_getAssetOwner
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      tags:
+        - Company
+  /company/assets/{id}/factory-location:
+    get:
+      operationId: CompanyController_getAssetFactoryLocation
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
       tags:
         - Company
   /company/devices:
@@ -870,10 +1069,16 @@ paths:
   /company/create-company:
     post:
       operationId: CompanyController_createCompany
-      parameters: []
+      parameters:
+        - name: X-API-Key
+          in: header
+          description: Placeholder gate ahead of a real external-API-token flow — must match COMPANY_CREATION_API_KEY. No Keycloak bearer token is required here, since the company's users have no Keycloak accounts yet at creation time.
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
-        description: Details for creating a company
+        description: 'Details for creating a company. company_ifric_id is deliberately absent: it is minted by ICID during this call and assigned by CompanyService.createCompany, so anything a caller sends is overwritten before it is ever read.'
         content:
           application/json:
             schema:
@@ -885,9 +1090,6 @@ paths:
                 registration_number:
                   type: string
                   example: REG123456
-                company_ifric_id:
-                  type: string
-                  example: IFRIC54321
                 address_1:
                   type: string
                   example: 123 Main Street
@@ -896,7 +1098,8 @@ paths:
                   example: New York
                 country:
                   type: string
-                  example: USA
+                  description: Full official country name as recognised by the countries-list package — e.g. 'United States', 'United Kingdom', 'Germany'. Abbreviations and ISO codes are rejected.
+                  example: United States
                 zip:
                   type: string
                   example: '10001'
@@ -909,15 +1112,9 @@ paths:
                 email:
                   type: string
                   example: admin@example.com
-                password:
-                  type: string
-                  example: strongpassword123
                 company_size:
                   type: string
                   example: 100-500
-                company_category_id:
-                  type: number
-                  example: 1
                 company_category:
                   type: string
                   enum:
@@ -944,7 +1141,6 @@ paths:
               required:
                 - company_name
                 - registration_number
-                - company_ifric_id
                 - address_1
                 - city
                 - country
@@ -952,7 +1148,6 @@ paths:
                 - admin_name
                 - position
                 - email
-                - password
                 - company_size
                 - company_category
                 - meta_data
@@ -989,54 +1184,6 @@ paths:
                 - status
       responses:
         '201':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Company
-  /company/get-company-assets/{id}:
-    get:
-      operationId: CompanyController_getCompanyAssets
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Company
-  /company/get-company-assets-by-asset/{assetId}:
-    get:
-      operationId: CompanyController_getCompanyAssetsbyAsset
-      parameters:
-        - name: assetId
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Company
-  /company/get-company-asset-by-assetid/{asset_ifric_id}:
-    get:
-      operationId: CompanyController_getCompanyAssetByAssetId
-      parameters:
-        - name: asset_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
           description: ''
       security:
         - access-token: []
@@ -1350,9 +1497,6 @@ paths:
                 registration_number:
                   type: string
                   example: REG123456
-                company_ifric_id:
-                  type: string
-                  example: IFRIC54321
                 address_1:
                   type: string
                   example: 123 Main Street
@@ -1361,7 +1505,8 @@ paths:
                   example: New York
                 country:
                   type: string
-                  example: USA
+                  description: Full official country name as recognised by the countries-list package — e.g. 'United States', 'United Kingdom', 'Germany'. Abbreviations and ISO codes are rejected.
+                  example: United States
                 zip:
                   type: string
                   example: '10001'
@@ -1374,15 +1519,9 @@ paths:
                 email:
                   type: string
                   example: admin@example.com
-                password:
-                  type: string
-                  example: strongpassword123
                 company_size:
                   type: string
                   example: 100-500
-                company_category_id:
-                  type: number
-                  example: 1
                 company_category:
                   type: string
                   enum:
@@ -1409,7 +1548,6 @@ paths:
               required:
                 - company_name
                 - registration_number
-                - company_ifric_id
                 - address_1
                 - city
                 - country
@@ -1417,7 +1555,6 @@ paths:
                 - admin_name
                 - position
                 - email
-                - password
                 - company_size
                 - company_category
                 - meta_data
@@ -1498,41 +1635,6 @@ paths:
           in: path
           schema:
             type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Company
-  /company/delete-company-asset/{id}:
-    delete:
-      operationId: CompanyController_deleteCompanyAsset
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Company
-  /company/delete-bulk-company-assets:
-    delete:
-      operationId: CompanyController_deleteCompanyAssets
-      parameters: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: string
       responses:
         '200':
           description: ''
@@ -1682,120 +1784,6 @@ paths:
         - access-token: []
       tags:
         - Certificate
-  /product/{id}:
-    get:
-      description: Resolves the product URN to a CompanyTwin record and returns the manufacturer Company (twin.manufacturer_company_id).
-      operationId: ProductController_getProductCompany
-      parameters:
-        - name: id
-          required: true
-          in: path
-          description: Product URN (CompanyTwin.asset_ifric_id)
-          schema:
-            example: urn:product:alpha-machine-001
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      summary: Get company schema data for a product URN
-      tags:
-        - Product
-  /product/{id}/owner:
-    get:
-      description: Resolves the product URN to a CompanyTwin record and returns the owner Company (twin.owner_company_id), as opposed to /product/:id which returns the manufacturer.
-      operationId: ProductController_getProductOwner
-      parameters:
-        - name: id
-          required: true
-          in: path
-          description: Product URN (CompanyTwin.asset_ifric_id)
-          schema:
-            example: urn:product:alpha-machine-001
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      summary: Get owner company data for a product URN
-      tags:
-        - Product
-  /product/{id}/factory-location:
-    get:
-      description: Resolves the product URN to a CompanyTwin record, then looks up the Factory referenced by twin.factory_id. Its owner_company_ifric_id matches the company_ifric_id of the company returned by /product/:id/owner.
-      operationId: ProductController_getProductFactoryLocation
-      parameters:
-        - name: id
-          required: true
-          in: path
-          description: Product URN (CompanyTwin.asset_ifric_id)
-          schema:
-            example: urn:product:alpha-machine-001
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      summary: Get the factory location for a product URN
-      tags:
-        - Product
-  /product/company-product:
-    post:
-      operationId: ProductController_addCompanyProduct
-      parameters: []
-      requestBody:
-        required: true
-        description: Tags an externally-catalogued product (by its external ID) to a company. Product data lives outside this service — only the ID is stored here.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                company_ifric_id:
-                  type: string
-                  example: COMPANY_IFRIC_ID_456
-                  description: The unique IFRIC ID of the company
-                product_ifric_id:
-                  type: string
-                  example: urn:product:alpha-machine-001
-                  description: External product identifier to tag to the company
-                billing_id:
-                  type: string
-                  example: BILLING_ID_789
-                  description: Optional billing ID for the product
-              required:
-                - company_ifric_id
-                - product_ifric_id
-      responses:
-        '201':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/company/{id}:
-    get:
-      description: Returns every CompanyProduct row tagged to this company — the external product_ifric_id values assigned via POST /product/company-product, plus the default product tags granted at company creation.
-      operationId: ProductController_getCompanyProducts
-      parameters:
-        - name: id
-          required: true
-          in: path
-          description: The company's company_ifric_id (not its internal _id)
-          schema:
-            example: COMPANY_IFRIC_ID_456
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      summary: Get all products tagged to a company
-      tags:
-        - Product
   /product/{id}/name:
     get:
       operationId: ProductController_getProductName
@@ -1803,6 +1791,7 @@ paths:
         - name: id
           required: true
           in: path
+          description: Product catalog id
           schema:
             type: string
       responses:
@@ -1810,6 +1799,7 @@ paths:
           description: ''
       security:
         - access-token: []
+      summary: Look up a catalog Product's name by id
       tags:
         - Product
   /product/by-name/{product_name}/id:
@@ -1819,6 +1809,7 @@ paths:
         - name: product_name
           required: true
           in: path
+          description: Product catalog name
           schema:
             type: string
       responses:
@@ -1826,276 +1817,7 @@ paths:
           description: ''
       security:
         - access-token: []
-      tags:
-        - Product
-  /product/company-product/{id}:
-    patch:
-      operationId: ProductController_updateCompanyProduct
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      requestBody:
-        required: true
-        description: Upserts an external product tag for this company, keyed by product_ifric_id.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                product_ifric_id:
-                  type: string
-                  example: urn:product:alpha-machine-001
-                  description: External product identifier
-              required:
-                - product_ifric_id
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-    delete:
-      operationId: ProductController_deleteCompanyProduct
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/twin:
-    post:
-      operationId: ProductController_createCompanyTwin
-      parameters: []
-      requestBody:
-        required: true
-        description: Details for creating a company twin
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                owner_company_ifric_id:
-                  type: string
-                  example: COMPANY_IFRIC_ID_123
-                manufacturer_ifric_id:
-                  type: string
-                  example: MANUFACTURER_IFRIC_ID_456
-                asset_ifric_id:
-                  type: string
-                  example: ASSET_IFRIC_ID_789
-                factory_id:
-                  type: string
-                  example: urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205
-                  description: Optional — ties this twin to an existing factory
-              required:
-                - owner_company_ifric_id
-                - manufacturer_ifric_id
-                - asset_ifric_id
-      responses:
-        '201':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-    patch:
-      operationId: ProductController_updateCompanyTwin
-      parameters: []
-      requestBody:
-        required: true
-        description: Details for updating a company twin
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                owner_company_ifric_id:
-                  type: string
-                  example: COMPANY_IFRIC_ID_123
-                manufacturer_ifric_id:
-                  type: string
-                  example: MANUFACTURER_IFRIC_ID_456
-                asset_ifric_id:
-                  type: string
-                  example: ASSET_IFRIC_ID_789
-                factory_id:
-                  type: string
-                  example: urn:ifric:ifx-eur-loc-fac-bd063b72-8748-461f-888d-3ea75058f205
-                  description: Optional — ties this twin to an existing factory
-              required:
-                - owner_company_ifric_id
-                - manufacturer_ifric_id
-                - asset_ifric_id
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/twin/{id}:
-    get:
-      operationId: ProductController_getCompanyTwinById
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-    delete:
-      operationId: ProductController_deleteCompanyTwinAsset
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/twin/by-asset/{asset_ifric_id}:
-    get:
-      operationId: ProductController_getCompanyTwinByAssetId
-      parameters:
-        - name: asset_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/twin/count:
-    post:
-      operationId: ProductController_getCompanyTwinCount
-      parameters: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: string
-      responses:
-        '201':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/twin/count/{company_ifric_id}:
-    get:
-      operationId: ProductController_getCompanyTwinCountByCompanyIfricId
-      parameters:
-        - name: company_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/twin/bulk:
-    delete:
-      operationId: ProductController_deleteCompanyTwins
-      parameters: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/manufacturer-assets/{id}:
-    get:
-      operationId: ProductController_getManufacturerAssets
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/manufacturer-owner-assets/{manufacturer_company_ifric_id}/{owner_company_ifric_id}:
-    get:
-      operationId: ProductController_getManufacturerOwnerAssets
-      parameters:
-        - name: manufacturer_company_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-        - name: owner_company_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Product
-  /product/owner-assets/{id}:
-    get:
-      operationId: ProductController_getOwnerAssets
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
+      summary: 'Reverse lookup: catalog Product id by name'
       tags:
         - Product
 info:

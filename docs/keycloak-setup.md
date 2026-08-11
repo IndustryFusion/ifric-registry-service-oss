@@ -4,10 +4,16 @@ Keycloak is this app's sole identity provider — there is no local auth
 fallback. It needs a one-time **manual** setup before login (or anything
 guarded) works, because there's no safe way to auto-provision client
 secrets before a human has interacted with the just-deployed instance. This
-doc is the shared source for that setup — linked from the root README's
-[Local Development](../README.md#local-development) and
-[Kubernetes Deployment](../README.md#kubernetes-deployment) sections, and
-from [`charts/ifric-registry-service/README.md`](../charts/ifric-registry-service/README.md).
+doc is the shared source of truth for that setup — linked from the root
+README's [Keycloak Authentication](../README.md#keycloak-authentication)
+section and from
+[`charts/ifric-registry-service/README.md`](../charts/ifric-registry-service/README.md).
+
+> **Just want the steps?**
+> [`keycloak-first-time-checklist.md`](keycloak-first-time-checklist.md) is
+> the same setup as a bare click-by-click checklist, with admin-console
+> paths and a verification step and none of the reasoning. Use it to *do*
+> the setup; use this page to understand it or to debug it.
 
 > **On Kubernetes this is automated.** The Helm chart's
 > `keycloak.bootstrap.enabled` (default on) runs a Job that creates
@@ -15,7 +21,7 @@ from [`charts/ifric-registry-service/README.md`](../charts/ifric-registry-servic
 > easy to miss by hand. Read this doc when you're on Compose, when the
 > Keycloak belongs to another team, or when you want to know what that Job
 > actually does. See
-> [`charts/ifric-registry-service/README.md`](../charts/ifric-registry-service/README.md#keycloak-setup).
+> [`charts/ifric-registry-service/README.md`](../charts/ifric-registry-service/README.md#keycloak).
 
 You need to create, in the target realm:
 

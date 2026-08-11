@@ -17,7 +17,7 @@
 // One-time, manual post-upgrade step for existing deployments: stamps
 // company_ifric_id/user_id onto every existing CompanyUser's Keycloak
 // account, so their access tokens start carrying those claims once the
-// realm protocol mapper (see README.md) is also in place. New
+// realm protocol mapper (see docs/keycloak-setup.md) is also in place. New
 // CompanyUsers created after this migration already get this at creation
 // time (CompanyService.createCompany / AuthService.createCompanyUser) — this
 // script only needs to run once, against accounts that predate it.
