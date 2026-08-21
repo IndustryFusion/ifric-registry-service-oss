@@ -51,8 +51,8 @@ README's Keycloak Authentication section).
 | DELETE | `/auth/delete-company-user/:id` | Auth | Delete a user (Keycloak identity + local rows). |
 | POST | `/auth/logout` | Public | Best-effort revoke the Keycloak session (pass `refresh_token`). |
 | POST | `/auth/refresh` | Public | Exchange a refresh token for a new access/refresh token pair. |
-| POST | `/auth/recover-password-request` | Public | Generate a new temporary password. |
-| POST | `/auth/recover-password` | Public | Set a new password using a temporary one. |
+| POST | `/auth/recover-password-request` | Public | Start password recovery — Keycloak emails the account holder a one-time reset link. Fixed acknowledgement, never a credential; throttled per address and per caller IP. Needs realm SMTP. |
+| POST | `/auth/recover-password` | Public | Set a new password given the current one (verified against Keycloak). |
 
 ## Company (`/company/*`)
 

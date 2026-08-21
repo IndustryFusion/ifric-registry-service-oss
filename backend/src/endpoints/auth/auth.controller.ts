@@ -24,6 +24,7 @@ import {
   Delete,
   UseGuards,
   Query,
+  Ip,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UpdateUserDetails } from './dto/update-auth.dto';
@@ -372,9 +373,14 @@ export class AuthController {
   @Post('recover-password-request')
   @ApiBody({
     description:
-      'Generate a new temporary password for a user, returned directly in ' +
-      'the response (no email is sent — this project has no bundled email ' +
-      'concept). The caller is responsible for relaying it to the user.',
+      'Start password recovery. Keycloak emails the account holder a ' +
+      'one-time link to set a new password; the response is a fixed ' +
+      'acknowledgement that never contains a credential and is identical ' +
+      'whether or not the address has an account. The existing password ' +
+      'keeps working until the link is used. Requires realm SMTP to be ' +
+      'configured (docs/keycloak-first-time-checklist.md) — if the mail ' +
+      'cannot be sent the call fails rather than falling back to anything. ' +
+      'Throttled per address and per caller IP (429 when exceeded).',
     required: true,
     schema: {
       type: 'object',
@@ -389,14 +395,22 @@ export class AuthController {
       required: ['email'],
     },
   })
-  async recoverPasswordRequest(@Body() body: { email: string }) {
-    return this.authService.recoverPasswordRequest(body.email);
+  async recoverPasswordRequest(
+    @Body() body: { email: string },
+    @Ip() ip: string,
+  ) {
+    return this.authService.recoverPasswordRequest(body.email, ip);
   }
 
   @Post('recover-password')
   @ApiBody({
     description:
-      'Recover a user password using a temporary password and set a new password',
+      'Set a new password for a user who already knows their current one ' +
+      '(verified against Keycloak first). Recovery itself no longer issues ' +
+      'a temporary password — recover-password-request hands the user off ' +
+      'to Keycloak — so this is now just a password change that does not ' +
+      'need a bearer token; `temporaryPassword` is whatever the current ' +
+      'password is.',
     required: true,
     schema: {
       type: 'object',
@@ -409,7 +423,8 @@ export class AuthController {
         temporaryPassword: {
           type: 'string',
           example: 'Temp@1234',
-          description: 'The temporary password sent to the user',
+          description:
+            "The user's current password (historically a temporary one)",
         },
         newPassword: {
           type: 'string',

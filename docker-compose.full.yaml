@@ -46,15 +46,48 @@ services:
     entrypoint: ["bash", "-c"]
     command:
       - |
+        set -e
+
+        # Idempotency comes from attempting rs.initiate() and tolerating the
+        # one error that means "somebody already did this" — NOT from
+        # probing rs.status() first. rs.status() throwing does not mean "not
+        # initiated yet": it also throws while a restarted mongod is still
+        # loading a config it already has in mongo_full_data. Treating that
+        # as "not initiated" led straight into an rs.initiate() that died
+        # with "MongoServerError: already initialized", failing this
+        # one-shot and so blocking `icid`, which waits on it — over a
+        # MongoDB that was in fact perfectly healthy.
         mongosh --host mongo:27017 --quiet --eval '
           try {
-            rs.status();
-            print("replica set already initiated");
-          } catch (e) {
             rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]});
             print("replica set initiated");
+          } catch (e) {
+            // 23 = AlreadyInitialized. Anything else is real — a mongod
+            // started without --replSet, an unreachable host — and should
+            // fail loudly rather than be swallowed.
+            if (e.code !== 23) { throw e; }
+            print("replica set already initiated");
           }
         '
+
+        # ICID connects with ?replicaSet=rs0, which needs a primary, not
+        # just a listening mongod — election takes a moment after a fresh
+        # initiate. Waiting here keeps that out of ICID's startup path.
+        echo "waiting for rs0 to elect a primary..."
+        attempts=0
+        until [ "$$(mongosh --host mongo:27017 --quiet --eval 'db.hello().isWritablePrimary' 2>/dev/null)" = "true" ]; do
+          attempts=$$((attempts + 1))
+          if [ "$$attempts" -gt 60 ]; then
+            echo "!! rs0 has a config but never reached PRIMARY after ~2 minutes:"
+            mongosh --host mongo:27017 --quiet --eval 'printjson(rs.status())' || true
+            echo "!! If the members listed are not mongo:27017, this volume was initiated"
+            echo "!! under a different host name — repoint it with rs.reconfig(), or start"
+            echo "!! clean: docker compose -f docker-compose.full.yaml down -v"
+            exit 1
+          fi
+          sleep 2
+        done
+        echo "rs0 is ready at mongo:27017"
 
   # This registry service's own database — separate from ICID's MongoDB
   # above.

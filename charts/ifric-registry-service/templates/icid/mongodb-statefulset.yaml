@@ -35,6 +35,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data/db
+          # A bare ping on purpose — do not "improve" this into a
+          # primary/rs.status() check. The ICID Pod's init container reaches
+          # this node through the Service, and a Service only routes to
+          # Ready endpoints: a readiness probe that required an initiated
+          # replica set could never pass, because the thing that initiates
+          # it can't connect until the probe passes.
           readinessProbe:
             exec:
               command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]

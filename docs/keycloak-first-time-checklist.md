@@ -91,14 +91,19 @@ own realm name for `ifric` if you use a different one — it has to match
 Realm dropdown (top-left) → **Create realm** → Realm name `ifric` →
 **Create**.
 
-## 3. Change two realm defaults
+## 3. Change one realm default
 
-Both are easy to miss, and the setup looks correct without them.
+It is easy to miss, and the setup looks correct without it.
 
 1. **Realm settings** → **General** tab → **Unmanaged attributes**:
    `Enabled` → **Save**.
-2. **Authentication** → **Required actions** tab → row **Verify Profile**
-   → turn the **Enabled** toggle **off**.
+
+Nothing else needs changing. In particular, leave **Authentication** →
+**Required actions** → **Verify Profile** alone: this app now gives every
+user it creates both a first and a last name, so the action no longer
+blocks logins. (Older releases set only `firstName`, and this step used to
+say to turn it off — see [Already have users?](#already-have-users) if your
+realm predates that.)
 
 ## 4. Create the `ifric` client (end-user login)
 
@@ -205,15 +210,58 @@ otherwise looks valid.
 
 ## Already have users?
 
-Accounts created before the mappers existed have no attributes to project.
-Run this once from `backend/`, then have those users log in again:
+Accounts created before the mappers existed have no attributes to project,
+and accounts created before this app started setting `lastName` have no
+surname — which the `Verify Profile` required action rejects with `Account
+is not fully set up` (the login then fails with `invalid_grant`). One run
+fixes both. Do it from `backend/`, then have those users log in again:
 
 ```bash
 npm run backfill:keycloak-attributes
 ```
+
+If you turned `Verify Profile` off on an older release, you can turn it back
+on once this has run.
 
 ## Not your job
 
 The dataspace's `data-space` client lives in this same realm but is owned
 by that team — don't create or manage it here. See
 [`keycloak-setup.md`](keycloak-setup.md#dataspace-participants-the-data-space-client).
+
+## 9. Realm SMTP — required for password recovery
+
+`POST /auth/recover-password-request` doesn't send mail itself and never
+returns a credential: it asks Keycloak to email the account holder a
+one-time `UPDATE_PASSWORD` action link
+(`KeycloakService.sendPasswordResetEmail`). With no realm SMTP, Keycloak
+can't send that mail and the endpoint returns an error — deliberately, it
+fails closed rather than fall back to handing a password to whoever asked.
+Everything else works without this step.
+
+The Helm bootstrap Job does **not** configure SMTP (steps 2–6 only) — it's
+manual everywhere, since the mail credentials are yours.
+
+**Realm settings** → **Email** tab → fill in **From**, **Host**, **Port**,
+and, if your relay needs them, **Authentication** / username / password →
+**Test connection** → **Save**.
+
+One catch: Keycloak sends to the address on the *user*, so a user with no
+`email` set never receives anything. Users this service provisions always
+have one (`KeycloakService.createUser` sets `email` and `username` to the
+same address), so this only bites identities created by hand.
+
+Verify end to end — this should answer with a fixed acknowledgement and no
+password, and land a mail in the account's inbox:
+
+```bash
+curl -s -X POST http://localhost:4007/auth/recover-password-request \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"<a real user email>"}'
+# {"success":true,"status":200,"message":"If that email address belongs to
+#  an account, a password recovery email has been sent to it"}
+```
+
+The same response comes back for an address with no account (by design —
+otherwise the endpoint would tell anyone who asks which addresses are
+registered), and a second call for either inside a minute returns `429`.

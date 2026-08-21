@@ -40,8 +40,10 @@ describe('AuthService', () => {
     createUser: jest.Mock;
     setPassword: jest.Mock;
     setEmail: jest.Mock;
+    sendPasswordResetEmail: jest.Mock;
     deleteUser: jest.Mock;
   };
+  let cacheManager: { get: jest.Mock; set: jest.Mock };
   let companyRepository: {
     find: jest.Mock;
     findOne: jest.Mock;
@@ -83,7 +85,18 @@ describe('AuthService', () => {
       createUser: jest.fn().mockResolvedValue('kc-user-1'),
       setPassword: jest.fn().mockResolvedValue(undefined),
       setEmail: jest.fn().mockResolvedValue(undefined),
+      sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
       deleteUser: jest.fn().mockResolvedValue(undefined),
+    };
+
+    // Stands in for the in-memory CacheModule store the recovery throttle
+    // uses; TTLs are irrelevant here since each test gets a fresh map.
+    const cacheStore = new Map<string, unknown>();
+    cacheManager = {
+      get: jest.fn(async (key: string) => cacheStore.get(key)),
+      set: jest.fn(async (key: string, value: unknown) => {
+        cacheStore.set(key, value);
+      }),
     };
     companyRepository = {
       find: jest.fn(),
@@ -121,7 +134,7 @@ describe('AuthService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
-        { provide: CACHE_MANAGER, useValue: {} },
+        { provide: CACHE_MANAGER, useValue: cacheManager },
         { provide: AccessControlService, useValue: accessControlService },
         { provide: getRepositoryToken(Company), useValue: companyRepository },
         {
@@ -520,7 +533,7 @@ describe('AuthService', () => {
   });
 
   describe('recoverPasswordRequest', () => {
-    it('generates a temporary password and sets it in Keycloak', async () => {
+    it('hands delivery to Keycloak and returns no credential', async () => {
       companyUserRepository.findOne.mockResolvedValue({
         _id: 'user-1',
         user_email: 'user@example.com',
@@ -528,11 +541,65 @@ describe('AuthService', () => {
 
       const result = await service.recoverPasswordRequest('user@example.com');
 
-      expect(keycloakService.setPassword).toHaveBeenCalledWith(
+      expect(keycloakService.sendPasswordResetEmail).toHaveBeenCalledWith(
         'user@example.com',
-        expect.any(String),
       );
-      expect(result.temporaryPassword).toEqual(expect.any(String));
+      // The whole point: nothing here touches or returns a password, and
+      // the existing one is left working until the emailed link is used.
+      expect(keycloakService.setPassword).not.toHaveBeenCalled();
+      expect(Object.keys(result)).toEqual(['success', 'status', 'message']);
+      expect(JSON.stringify(result)).not.toMatch(/password.{0,4}:/i);
+    });
+
+    it('answers unknown addresses identically, so it cannot be used to enumerate accounts', async () => {
+      companyUserRepository.findOne.mockResolvedValue({
+        _id: 'user-1',
+        user_email: 'user@example.com',
+      });
+      const known = await service.recoverPasswordRequest('user@example.com');
+
+      companyUserRepository.findOne.mockResolvedValue(null);
+      const unknown =
+        await service.recoverPasswordRequest('nobody@example.com');
+
+      expect(unknown).toEqual(known);
+      expect(keycloakService.sendPasswordResetEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed when delivery fails, rather than returning a password', async () => {
+      companyUserRepository.findOne.mockResolvedValue({
+        _id: 'user-1',
+        user_email: 'user@example.com',
+      });
+      keycloakService.sendPasswordResetEmail.mockRejectedValue(
+        new HttpException('Failed to send the password recovery email', 500),
+      );
+
+      await expect(
+        service.recoverPasswordRequest('user@example.com'),
+      ).rejects.toThrow(HttpException);
+    });
+
+    it('throttles repeat requests for the same address, existing or not', async () => {
+      companyUserRepository.findOne.mockResolvedValue(null);
+
+      await service.recoverPasswordRequest('User@Example.com');
+
+      // Same address, different casing, and an address with no account —
+      // still throttled, so a 429 says nothing about who is registered.
+      await expect(
+        service.recoverPasswordRequest('user@example.com'),
+      ).rejects.toThrow(HttpException);
+    });
+
+    it('throttles a caller hammering many addresses from one IP', async () => {
+      companyUserRepository.findOne.mockResolvedValue(null);
+
+      await service.recoverPasswordRequest('a@example.com', '203.0.113.9');
+
+      await expect(
+        service.recoverPasswordRequest('b@example.com', '203.0.113.9'),
+      ).rejects.toThrow(HttpException);
     });
   });
 
@@ -557,6 +624,21 @@ describe('AuthService', () => {
         'user@example.com',
         'brand-new-pw',
       );
+    });
+
+    it('does not echo the supplied password back in the response', async () => {
+      companyUserRepository.findOne.mockResolvedValue({
+        _id: 'user-1',
+        user_email: 'user@example.com',
+      });
+
+      const result = await service.recoverPassword(
+        'user@example.com',
+        'temp-pw',
+        'brand-new-pw',
+      );
+
+      expect(JSON.stringify(result)).not.toContain('temp-pw');
     });
 
     it('rejects when the temporary password is incorrect', async () => {

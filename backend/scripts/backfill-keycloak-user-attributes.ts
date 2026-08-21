@@ -14,13 +14,23 @@
 // limitations under the License.
 //
 
-// One-time, manual post-upgrade step for existing deployments: stamps
-// company_ifric_id/user_id onto every existing CompanyUser's Keycloak
-// account, so their access tokens start carrying those claims once the
-// realm protocol mapper (see docs/keycloak-setup.md) is also in place. New
-// CompanyUsers created after this migration already get this at creation
-// time (CompanyService.createCompany / AuthService.createCompanyUser) — this
-// script only needs to run once, against accounts that predate it.
+// One-time, manual post-upgrade step for existing deployments. For every
+// existing CompanyUser's Keycloak account it:
+//
+//   1. stamps company_ifric_id/user_id, so their access tokens start
+//      carrying those claims once the realm protocol mapper (see
+//      docs/keycloak-setup.md) is also in place; and
+//   2. fills in firstName/lastName from CompanyUser.user_name — accounts
+//      created before KeycloakService.createUser started setting lastName
+//      have none, which leaves them stuck behind the VERIFY_PROFILE
+//      required action (ROPC login fails with `invalid_grant`) if that
+//      action is ever enabled on the realm.
+//
+// New CompanyUsers created after this migration already get both at
+// creation time (CompanyService.createCompany / AuthService
+// .createCompanyUser) — this script only needs to run once, against
+// accounts that predate it. It is idempotent: re-running it just rewrites
+// the same values.
 //
 // Usage: npm run backfill:keycloak-attributes
 
@@ -57,6 +67,7 @@ async function main() {
         company_ifric_id: companyIfricId,
         user_id: user._id,
       });
+      await keycloakService.setName(user.user_email, user.user_name);
       console.log(`Updated ${user.user_email}`);
       updated++;
     } catch (err) {

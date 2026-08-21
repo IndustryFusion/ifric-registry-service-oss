@@ -22,38 +22,123 @@ spec:
       # Mirrors docker-compose.full.yaml's mongo-init sidecar: ICID's
       # MongoDB is started in --replSet mode, so something has to initiate
       # the single-node replica set before ICID itself can connect. Done
-      # here as initContainers (idempotent — safe on every pod restart)
+      # here as an initContainer (idempotent — safe on every pod restart)
       # rather than a separate Job, for the same Helm-hook-ordering reasons
       # documented on the backend Deployment. Skipped entirely when
       # icid.mongodb.enabled=false — an external replica set is assumed to
       # already be initiated; this chart has no business calling
       # rs.initiate() on a database it doesn't own.
       initContainers:
-        - name: wait-for-mongo
-          image: "{{ .Values.icid.mongodb.image.repository }}:{{ .Values.icid.mongodb.image.tag }}"
-          command:
-            - sh
-            - -c
-            - |
-              until mongosh --host {{ include "ifric-registry-service.icidMongoHost" . }} --quiet --eval "db.adminCommand('ping').ok"; do
-                echo "waiting for icid mongodb..."
-                sleep 2
-              done
         - name: init-mongo-replicaset
           image: "{{ .Values.icid.mongodb.image.repository }}:{{ .Values.icid.mongodb.image.tag }}"
+          env:
+            - name: MONGO_HOST
+              value: {{ printf "%s:%v" (include "ifric-registry-service.icidMongoHost" .) .Values.icid.mongodb.service.port | quote }}
           command:
             - sh
             - -c
             - |
-              mongosh --host {{ include "ifric-registry-service.icidMongoHost" . }} --quiet --eval '
+              set -e
+
+              echo "waiting for icid mongodb at $MONGO_HOST..."
+              until mongosh --host "$MONGO_HOST" --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do
+                sleep 2
+              done
+
+              # Idempotency comes from attempting rs.initiate() and
+              # tolerating the one error that means "somebody already did
+              # this" — NOT from probing rs.status() first. rs.status()
+              # throwing does not mean "not initiated yet": it also throws
+              # while a restarted mongod is still loading a config it
+              # already has on disk (persistence is on by default, so that
+              # config normally survives), and on a rolling update two ICID
+              # pods can race each other here. Treating either as "not
+              # initiated" led straight into an rs.initiate() that died
+              # with "MongoServerError: already initialized" and failed
+              # this initContainer, leaving ICID stuck on a MongoDB that
+              # was in fact perfectly healthy.
+              mongosh --host "$MONGO_HOST" --quiet --eval '
                 try {
-                  rs.status();
-                  print("replica set already initiated");
-                } catch (e) {
-                  rs.initiate({_id: "rs0", members: [{_id: 0, host: "{{ include "ifric-registry-service.icidMongoHost" . }}:{{ .Values.icid.mongodb.service.port }}"}]});
+                  rs.initiate({
+                    _id: "rs0",
+                    members: [{_id: 0, host: process.env.MONGO_HOST}],
+                  });
                   print("replica set initiated");
+                } catch (e) {
+                  // 23 = AlreadyInitialized. Anything else is real — a
+                  // mongod started without --replSet, an unreachable host —
+                  // and should fail this Pod loudly rather than be
+                  // swallowed.
+                  if (e.code !== 23) {
+                    throw e;
+                  }
+                  print("replica set already initiated");
                 }
               '
+
+              # Self-heal one specific stuck state, because the Pod can't
+              # get out of it on its own: a mongod that started while its
+              # own DNS name didn't resolve yet decides the stored config
+              # doesn't describe it and parks in REMOVED, where it answers
+              # ping, holds a perfectly good config, and never becomes
+              # PRIMARY. publishNotReadyAddresses on the MongoDB Service
+              # stops that happening; this repairs volumes already in it.
+              # Deliberately narrow: only the single-member config this
+              # chart itself writes gets re-applied, anything else is left
+              # alone and fails the Pod.
+              mongosh --host "$MONGO_HOST" --quiet --eval '
+                let orphaned = false;
+                try {
+                  // Assigned, not bare: mongosh --eval prints the last
+                  // expression value of the script, and a bare rs.status()
+                  // would dump the whole status document every healthy run.
+                  const status = rs.status();
+                  void status;
+                } catch (e) {
+                  // 93 = InvalidReplicaSetConfig: a config is stored, but
+                  // this node does not find itself in it — the one state
+                  // repaired below. Anything else, including a transient
+                  // 94 while a config is still being loaded, is left to
+                  // the bounded wait further down: it prints a diagnostic
+                  // and times out, rather than failing here on a state
+                  // that may still resolve itself.
+                  orphaned = e.code === 93;
+                }
+                if (orphaned) {
+                  const cfg = rs.conf();
+                  if (cfg.members.length !== 1 ||
+                      cfg.members[0].host !== process.env.MONGO_HOST) {
+                    print("!! rs0 holds a config this node is not part of, and it is not");
+                    print("!! the single-member config this chart writes — not touching it:");
+                    printjson(cfg);
+                    quit(1);
+                  }
+                  cfg.version = cfg.version + 1;
+                  rs.reconfig(cfg, {force: true});
+                  print("re-applied rs0 config to this node (was orphaned from it)");
+                }
+              '
+
+              # ICID connects with ?replicaSet=rs0, which needs a primary,
+              # not just a listening mongod — election takes a moment after
+              # a fresh initiate. Waiting here keeps that out of ICID's
+              # startup path.
+              echo "waiting for rs0 to elect a primary..."
+              attempts=0
+              until [ "$(mongosh --host "$MONGO_HOST" --quiet --eval 'db.hello().isWritablePrimary' 2>/dev/null)" = "true" ]; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -gt 60 ]; then
+                  echo "!! rs0 has a config but never reached PRIMARY after ~2 minutes."
+                  mongosh --host "$MONGO_HOST" --quiet --eval 'printjson(rs.status())' || true
+                  echo "!! If the members listed above are not $MONGO_HOST, this MongoDB was"
+                  echo "!! initiated under a different host name — a renamed release reusing the"
+                  echo "!! old PVC, or a hand-initiated volume. Repoint it with rs.reconfig(),"
+                  echo "!! or start from an empty volume."
+                  exit 1
+                fi
+                sleep 2
+              done
+              echo "rs0 is ready at $MONGO_HOST"
       {{- end }}
       containers:
         # Only /company, /script, and /certificate/* are exercised by this

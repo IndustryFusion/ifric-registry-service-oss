@@ -8,6 +8,17 @@ metadata:
     app.kubernetes.io/component: icid-mongodb
 spec:
   clusterIP: None
+  # Load-bearing, not a tuning knob. mongod decides which member of the
+  # replica-set config is *itself* by resolving each member's host — and it
+  # does that while starting up, long before its own readiness probe has
+  # passed. A headless Service publishes DNS only for Ready endpoints by
+  # default, so on any restart mongod would look up the very name this
+  # chart put in the config, get NXDOMAIN, conclude the config doesn't
+  # describe it, and park in REMOVED ("Does not have a valid replica set
+  # config") — permanently, since a single-member set gets no heartbeats to
+  # re-evaluate on. The Pod then answers ping but never becomes PRIMARY,
+  # and ICID hangs waiting for one.
+  publishNotReadyAddresses: true
   ports:
     - port: {{ .Values.icid.mongodb.service.port }}
       targetPort: mongodb

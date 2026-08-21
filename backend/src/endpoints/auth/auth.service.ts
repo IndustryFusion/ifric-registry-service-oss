@@ -43,6 +43,10 @@ import * as moment from 'moment';
 
 dotenv.config();
 
+// Window for the unauthenticated password-recovery throttle
+// (AuthService.recoverPasswordRequest), in milliseconds.
+const RECOVERY_THROTTLE_MS = 60_000;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -909,7 +913,6 @@ export class AuthService {
         success: true,
         status: 200,
         message: 'Password updated successfully',
-        temporaryPassword,
       };
     } catch (err) {
       if (err instanceof HttpException) {
@@ -922,32 +925,97 @@ export class AuthService {
     }
   }
 
-  async recoverPasswordRequest(email: string) {
+  /**
+   * Starts password recovery for an account. This endpoint is
+   * unauthenticated and reachable by anyone, so it deliberately does three
+   * things and no more:
+   *
+   * - It never returns a credential. Keycloak owns credentials here, so it
+   *   also owns delivery: it emails the account's *own* address a one-time
+   *   UPDATE_PASSWORD action link and collects the new password itself.
+   *   Nothing here sees it. (This replaces an earlier version that
+   *   generated a temporary password, set it in Keycloak, and returned it
+   *   in the response body — which handed any anonymous caller a working
+   *   password for any address they could name, and locked the real user
+   *   out on the way.)
+   * - It doesn't change anything on its own. The user's existing password
+   *   keeps working until they follow the link, so a hostile caller can't
+   *   use this to lock anyone out either.
+   * - It answers identically whether or not the address belongs to an
+   *   account, so it isn't an account-enumeration oracle. The one seam is
+   *   a delivery failure (below), which is a global outage rather than a
+   *   per-address signal.
+   *
+   * It fails closed: if the mail can't be sent — realm SMTP unconfigured
+   * is the usual cause, see docs/keycloak-first-time-checklist.md — the
+   * call errors. There is no fallback that returns the password.
+   */
+  async recoverPasswordRequest(email: string, requesterIp?: string) {
+    // Identical for every outcome below; see the doc comment.
+    const acknowledgement = {
+      success: true,
+      status: 200,
+      message:
+        'If that email address belongs to an account, a password recovery ' +
+        'email has been sent to it',
+    };
+
+    // Cheap in-process throttle: one request per address and per caller IP
+    // per window. Keyed on the submitted address whether or not it exists,
+    // so a 429 leaks nothing. The cache is this process's own memory
+    // (CacheModule, store: 'memory'), so across replicas the limit is
+    // per-replica — put a real limiter at the gateway for anything
+    // internet-facing. requesterIp is only as trustworthy as the
+    // deployment's proxy configuration.
+    const throttleKeys = [
+      `recover-password-request:email:${String(email ?? '')
+        .trim()
+        .toLowerCase()}`,
+      ...(requesterIp ? [`recover-password-request:ip:${requesterIp}`] : []),
+    ];
+    for (const key of throttleKeys) {
+      if (await this.cacheManager.get(key)) {
+        throw new HttpException(
+          'Too many password recovery requests, try again shortly',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+    // Marked before any work, so a failed attempt still spends the window.
+    // cache-manager v5 takes the TTL in milliseconds.
+    await Promise.all(
+      throttleKeys.map((key) =>
+        this.cacheManager.set(key, true, RECOVERY_THROTTLE_MS),
+      ),
+    );
+
     try {
       const companyUser = await this.companyUserRepository.findOne({
         where: { user_email: email },
       });
 
       if (!companyUser) {
-        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+        // Deliberately not a 404 — that would answer "does this address
+        // have an account?" for anyone who asks.
+        return acknowledgement;
       }
-      // Generate a new temporary password
-      const temporaryPassword = generator.generate({
-        length: 12,
-        numbers: true,
-        symbols: true,
-        uppercase: true,
-        excludeSimilarCharacters: true,
-      });
 
-      await this.keycloakService.setPassword(email, temporaryPassword);
+      try {
+        await this.keycloakService.sendPasswordResetEmail(email);
+      } catch (err) {
+        // Fail closed, and with a single shape. Keycloak's own error is
+        // logged rather than returned: the informative one here is a 404
+        // for an address that has a local row but no Keycloak identity,
+        // which would say more about that address than the
+        // acknowledgement does.
+        console.error('Password recovery email could not be sent:', err);
+        throw new HttpException(
+          'Could not send the password recovery email',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
 
-      return {
-        success: true,
-        status: 200,
-        message: 'Temporary password generated successfully',
-        temporaryPassword,
-      };
+      return acknowledgement;
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;

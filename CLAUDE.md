@@ -212,12 +212,43 @@ themselves; every credential operation goes through `KeycloakService`
   `update-password`, `recover-password[-request]`, `delete-company-user`,
   and `CompanyService.createCompany`'s admin-user provisioning) all call
   `KeycloakService`'s Admin API methods (`createUser`/`setPassword`/
-  `setEmail`/`deleteUser`) instead of hashing/storing a password locally.
+  `setEmail`/`sendPasswordResetEmail`/`deleteUser`) instead of
+  hashing/storing a password locally.
   These go through a **separate** confidential client, `ifric-admin`
   (client-credentials grant, service account granted the
   realm-management client's `manage-users` role) — kept separate from
   `ifric` so a leaked end-user-facing client secret can't also manage the
   realm's users.
+
+  `createUser` fills in **both** `firstName` and `lastName`, splitting the
+  single free-text name this app collects (`splitPersonName` in
+  `keycloak.service.ts`; a one-token name is used for both, a blank one
+  falls back to the email's local part). Keycloak's default user profile
+  requires both, and a user missing either gets the `VERIFY_PROFILE`
+  required action — which an ROPC login can only ever fail
+  (`invalid_grant`, surfacing here as `'Invalid Password'`), since there is
+  no browser flow in which to complete a profile. Leaving a name field
+  blank therefore means new users can't log in at all; the realm-side
+  workaround of disabling `VERIFY_PROFILE` is gone from the Helm bootstrap
+  and the setup docs, so don't rely on it. Pre-existing accounts get a
+  surname from `npm run backfill:keycloak-attributes`.
+- **`POST /auth/recover-password-request`** — unauthenticated, so it is
+  written to give an anonymous caller nothing. It generates no password and
+  returns none: `KeycloakService.sendPasswordResetEmail` asks Keycloak to
+  mail the account holder a one-time `UPDATE_PASSWORD` action link, and the
+  user's existing password stays valid until they use it. The response is a
+  fixed acknowledgement, identical for a registered and an unregistered
+  address (not a 404 — that would make it an account-enumeration oracle),
+  and requests are throttled per address and per caller IP through the
+  global in-memory cache. It fails closed: no realm SMTP (step 9 of
+  `docs/keycloak-first-time-checklist.md`) means an error, never a
+  fallback. An earlier version set a fresh temporary password in Keycloak
+  and returned it in the response body — that handed anyone who knew an
+  email address a working credential for that account *and* locked the real
+  user out; don't reintroduce any variant of it, including "just for the
+  OSS build" or "the caller can relay it". `POST /auth/recover-password`
+  survives from that flow but is now only a password change that verifies
+  the current password first.
 
 `CompanyUser.user_password`/`jwt_token` and `Company.password` were dropped
 (migration `DropLocalAuthColumns1784546767848`) — don't reintroduce them;

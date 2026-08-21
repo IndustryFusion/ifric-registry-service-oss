@@ -68,12 +68,12 @@ data:
     fi
 
     # --- realm user profile ---------------------------------------------
-    # Two non-obvious defaults in Keycloak 24+ that each silently break
-    # this app on a realm created with stock settings. Both verified
-    # against a real 26.0 instance; don't remove either without re-testing
-    # an actual login end to end.
+    # A non-obvious default in Keycloak 24+ that silently breaks this app on
+    # a realm created with stock settings. Verified against a real 26.0
+    # instance; don't remove it without re-testing an actual login end to
+    # end.
     #
-    # 1. Declarative user profiles ship with unmanaged attributes DISABLED,
+    # Declarative user profiles ship with unmanaged attributes DISABLED,
     #    so company_ifric_id/user_id are dropped on write. The Admin API
     #    still answers 201 — the attributes just aren't there afterwards,
     #    the protocol mappers below then map nothing, and every
@@ -101,28 +101,19 @@ data:
       exit 1
     fi
 
-    # 2. VERIFY_PROFILE requires firstName AND lastName. KeycloakService's
-    #    createUser sets only firstName (this app collects one name), so
-    #    every user it creates would be stuck at "Account is not fully set
-    #    up" and the password grant would fail with invalid_grant. There is
-    #    no browser flow here to complete a profile in — logins are ROPC —
-    #    so the action can only ever block, never resolve.
-    #    Old enough servers don't register this required action at all, in
-    #    which case there is likewise nothing to disable. Anything else is
-    #    fatal for the same reason as above.
-    if vp_err="$(kc update authentication/required-actions/VERIFY_PROFILE \
-                   -r "${KEYCLOAK_REALM}" -s enabled=false 2>&1)"; then
-      echo "==> Realm required action VERIFY_PROFILE disabled"
-    elif echo "${vp_err}" | grep -qi "404\|not found"; then
-      echo "==> Realm required action VERIFY_PROFILE not registered on this"
-      echo "    Keycloak — nothing to disable. Continuing."
-    else
-      echo "!! Could not disable the VERIFY_PROFILE required action on realm '${KEYCLOAK_REALM}':"
-      echo "${vp_err}"
-      echo "   Left enabled, every user this app creates is stuck at"
-      echo "   'Account is not fully set up' and login fails with invalid_grant."
-      exit 1
-    fi
+    # The VERIFY_PROFILE required action (which enforces firstName AND
+    # lastName) is deliberately left at its Keycloak default here. This
+    # bootstrap used to disable it, because KeycloakService.createUser set
+    # only firstName and every user it created was then stuck at "Account is
+    # not fully set up" — ROPC logins have no browser flow in which to
+    # complete a profile, so the action could only ever block. createUser now
+    # sets both names (splitPersonName in keycloak.service.ts), so there is
+    # nothing left to weaken.
+    #
+    # Realms bootstrapped by an older chart keep the action disabled — this
+    # script does not re-enable it, since accounts created back then still
+    # have no lastName and would be locked out. Give them one with
+    # `npm run backfill:keycloak-attributes` before turning it back on.
 
     # Resolves a client's internal UUID (which every sub-resource path
     # needs) from its human clientId. Empty output means "not there".

@@ -17,7 +17,7 @@
 import { HttpException, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import * as jwt from 'jsonwebtoken';
-import { KeycloakService } from './keycloak.service';
+import { KeycloakService, splitPersonName } from './keycloak.service';
 
 jest.mock('axios');
 jest.mock('jsonwebtoken');
@@ -233,6 +233,8 @@ describe('KeycloakService', () => {
         expect.objectContaining({
           username: 'new@example.com',
           email: 'new@example.com',
+          firstName: 'New',
+          lastName: 'User',
           credentials: [
             { type: 'password', value: 'temp-pw', temporary: false },
           ],
@@ -240,6 +242,32 @@ describe('KeycloakService', () => {
         expect.any(Object),
       );
     });
+
+    // Without a lastName the VERIFY_PROFILE required action blocks the
+    // password grant, so every created user must carry a non-empty one
+    // however odd the collected name is.
+    it.each([
+      ['Ada Lovelace', 'Ada', 'Lovelace'],
+      ['Jean Luc Picard', 'Jean', 'Luc Picard'],
+      ['  Ada   Lovelace  ', 'Ada', 'Lovelace'],
+      ['Prince', 'Prince', 'Prince'],
+      ['   ', 'new', 'new'],
+      ['', 'new', 'new'],
+    ])(
+      'always sends a non-empty firstName and lastName for %p',
+      async (name, firstName, lastName) => {
+        (axios.get as jest.Mock).mockResolvedValue({
+          data: [{ id: 'new-kc-user' }],
+        });
+
+        await service.createUser('new@example.com', name as string, 'temp-pw');
+
+        const [, body] = (axios.post as jest.Mock).mock.calls.find(([url]) =>
+          url.includes('/users'),
+        );
+        expect(body).toMatchObject({ firstName, lastName });
+      },
+    );
 
     it('throws when the create call itself fails', async () => {
       (axios.post as jest.Mock).mockImplementation((url: string) => {
@@ -299,6 +327,37 @@ describe('KeycloakService', () => {
         url.includes('/users'),
       );
       expect(body).not.toHaveProperty('attributes');
+    });
+  });
+
+  describe('setName', () => {
+    it('PUTs the split first/last name onto the existing user', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: [{ id: 'kc-user-1' }],
+      });
+      (axios.put as jest.Mock).mockResolvedValue({});
+
+      await service.setName('user@example.com', 'Ada Lovelace');
+
+      expect(axios.put).toHaveBeenCalledWith(
+        expect.stringContaining('/users/kc-user-1'),
+        { firstName: 'Ada', lastName: 'Lovelace' },
+        expect.any(Object),
+      );
+    });
+
+    it('throws NOT_FOUND when the user does not exist in Keycloak', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({ data: [] });
+
+      await expect(
+        service.setName('nobody@example.com', 'Ada Lovelace'),
+      ).rejects.toMatchObject({ status: 404 });
     });
   });
 
@@ -374,6 +433,61 @@ describe('KeycloakService', () => {
     });
   });
 
+  describe('sendPasswordResetEmail', () => {
+    it('asks Keycloak to email an UPDATE_PASSWORD action link', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: [{ id: 'kc-user-1' }],
+      });
+      (axios.put as jest.Mock).mockResolvedValue({});
+
+      await service.sendPasswordResetEmail('user@example.com');
+
+      expect(axios.put).toHaveBeenCalledWith(
+        expect.stringContaining('/users/kc-user-1/execute-actions-email'),
+        ['UPDATE_PASSWORD'],
+        expect.any(Object),
+      );
+      // Keycloak mails the link; the existing credential is untouched.
+      expect(axios.put).not.toHaveBeenCalledWith(
+        expect.stringContaining('/reset-password'),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('throws NOT_FOUND when the user does not exist in Keycloak', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({ data: [] });
+
+      await expect(
+        service.sendPasswordResetEmail('nobody@example.com'),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it('throws when Keycloak cannot send the mail (e.g. no realm SMTP)', async () => {
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { access_token: 'admin-token', expires_in: 60 },
+      });
+      (axios.get as jest.Mock).mockResolvedValue({
+        data: [{ id: 'kc-user-1' }],
+      });
+      (axios.put as jest.Mock).mockRejectedValue({
+        response: {
+          data: { errorMessage: 'Failed to send execute-actions email' },
+        },
+      });
+
+      await expect(
+        service.sendPasswordResetEmail('user@example.com'),
+      ).rejects.toThrow(HttpException);
+    });
+  });
+
   describe('deleteUser', () => {
     it('deletes the matching Keycloak user', async () => {
       (axios.post as jest.Mock).mockResolvedValue({
@@ -402,6 +516,43 @@ describe('KeycloakService', () => {
         service.deleteUser('nobody@example.com'),
       ).resolves.toBeUndefined();
       expect(axios.delete).not.toHaveBeenCalled();
+    });
+  });
+  describe('splitPersonName', () => {
+    it('takes the first token as the given name and the rest as the surname', () => {
+      expect(splitPersonName('Ada Lovelace', 'a@example.com')).toEqual({
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      });
+      expect(splitPersonName('Jean Luc Picard', 'a@example.com')).toEqual({
+        firstName: 'Jean',
+        lastName: 'Luc Picard',
+      });
+    });
+
+    it('repeats a single-token name rather than inventing a placeholder', () => {
+      expect(splitPersonName('Prince', 'a@example.com')).toEqual({
+        firstName: 'Prince',
+        lastName: 'Prince',
+      });
+    });
+
+    it('falls back to the email local part when the name is blank', () => {
+      expect(splitPersonName('   ', 'ada@example.com')).toEqual({
+        firstName: 'ada',
+        lastName: 'ada',
+      });
+      expect(splitPersonName(undefined, 'ada@example.com')).toEqual({
+        firstName: 'ada',
+        lastName: 'ada',
+      });
+    });
+
+    it('never returns an empty field, even with no usable email', () => {
+      expect(splitPersonName('', '')).toEqual({
+        firstName: 'user',
+        lastName: 'user',
+      });
     });
   });
 });

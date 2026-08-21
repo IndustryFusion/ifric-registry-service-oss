@@ -158,7 +158,6 @@ restart needed.
 |---|---|
 | The realm (`env.keycloak.realm`, default `ifric`) | nothing else can exist without it |
 | Realm: **unmanaged attributes enabled** | Keycloak 24+ silently drops unknown user attributes. The API returns `201`, but `company_ifric_id`/`user_id` are never stored — so tokens lack them and every endpoint 403s |
-| Realm: **`VERIFY_PROFILE` disabled** | it requires first *and* last name; the app collects one name, so every user it creates would be stuck at `Account is not fully set up` and login would fail |
 | Client `ifric` — confidential, direct access grants | end-user login is a ROPC password grant |
 | Mappers `company_ifric_id`, `user_id` on `ifric` | puts the stored attributes into the token, which is what authorization reads |
 | Client `ifric-admin` — confidential, service account | Admin API: create user, reset password, delete user |

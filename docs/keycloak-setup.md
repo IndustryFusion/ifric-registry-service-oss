@@ -25,9 +25,9 @@ section and from
 
 You need to create, in the target realm:
 
-1. A realm (e.g. `ifric`) — any deployment gets its own. Two of its
+1. A realm (e.g. `ifric`) — any deployment gets its own. One of its
    defaults must be changed, or the setup below will look correct and still
-   not work (both verified against Keycloak 26):
+   not work (verified against Keycloak 26):
    - **Realm settings → General → Unmanaged attributes: `Enabled`.**
      Keycloak 24+ uses declarative user profiles, and unknown attributes
      are discarded by default. The Admin API still answers `201` when this
@@ -35,12 +35,17 @@ You need to create, in the target realm:
      afterwards, the mappers in step 4 then project nothing, and every
      company-scoped endpoint returns 403 on a token that looks perfectly
      valid.
-   - **Authentication → Required actions → `Verify Profile`: off.** It
-     requires both a first and a last name; this app collects a single
-     name and sets only `firstName`, so every user it creates would be
-     stuck at `Account is not fully set up` and the password grant would
-     fail with `invalid_grant`. Logins here are ROPC, so there is no
-     browser flow in which a user could ever complete the profile.
+
+   `Verify Profile` (**Authentication → Required actions**) can stay on,
+   its default. It requires both a first and a last name, and this app
+   collects a single one — but `KeycloakService.createUser` splits that one
+   name into `firstName`/`lastName` (`splitPersonName`) and never leaves
+   either blank, precisely so this realm doesn't have to be weakened.
+   Accounts created before that fix have no `lastName` and *are* blocked by
+   it (`Account is not fully set up`, surfacing as `invalid_grant` on the
+   ROPC login, with no browser flow in which the user could ever complete
+   the profile) — give them one with `npm run backfill:keycloak-attributes`
+   before enabling the action on a realm that has been running a while.
 2. A **confidential** client `ifric` with **Direct Access Grants** enabled
    — this is what end users authenticate against (`POST /auth/login`, a
    Resource Owner Password Credentials grant).
@@ -103,8 +108,12 @@ The backend picks these up on its next restart.
 ## Backfilling existing users
 
 Accounts created before the two protocol mappers existed won't have the
-`company_ifric_id`/`user_id` attributes. Run this once, from `backend/`,
-against a running Postgres + reachable Keycloak:
+`company_ifric_id`/`user_id` attributes, and accounts created before
+`createUser` started setting `lastName` have no surname (which is what the
+`Verify Profile` required action refuses). The same script fixes both —
+it rewrites the attributes and fills in `firstName`/`lastName` from
+`CompanyUser.user_name`. Run it once, from `backend/`, against a running
+Postgres + reachable Keycloak:
 
 ```bash
 npm run backfill:keycloak-attributes
