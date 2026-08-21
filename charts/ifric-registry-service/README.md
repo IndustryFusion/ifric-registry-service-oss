@@ -156,7 +156,6 @@ restart needed.
 
 | Object | Why |
 |---|---|
-| The realm (`env.keycloak.realm`, default `ifric`) | nothing else can exist without it |
 | Realm: **unmanaged attributes enabled** | Keycloak 24+ silently drops unknown user attributes. The API returns `201`, but `company_ifric_id`/`user_id` are never stored — so tokens lack them and every endpoint 403s |
 | Client `ifric` — confidential, direct access grants | end-user login is a ROPC password grant |
 | Mappers `company_ifric_id`, `user_id` on `ifric` | puts the stored attributes into the token, which is what authorization reads |
@@ -166,34 +165,50 @@ restart needed.
 Everything is checked before it's created, so the Job re-runs safely on
 every upgrade and repairs a drifted realm.
 
+**Two things the Job deliberately cannot do**, because it holds no
+administrative credential: create the realm, and create the client it
+authenticates as. It signs in as the service account of a confidential
+client (`keycloak.bootstrap.clientId`, default `ifric-bootstrap`) that
+holds `manage-clients`, `manage-realm` and `manage-users` in that one realm
+— never as Keycloak's admin. So the realm and that one client are a
+one-time manual step
+([`docs/keycloak-first-time-checklist.md`](../../docs/keycloak-first-time-checklist.md)),
+and `secrets.keycloakBootstrapClientSecret` is required; the render fails
+with instructions if it is missing.
+
+That is the whole point of the arrangement: an identity provider's root
+account should not be a value in an application's chart. This Job can
+manage one realm, cannot reach `master` or any other realm, cannot sign in
+to the console, and is revoked by deleting one client.
+
 **Client secrets need no copying.** Leave them blank and the chart
 generates them, reuses them across upgrades, and the Job sets those exact
 values on the Keycloak clients — both sides agree by construction. Set them
 explicitly to choose your own.
 
-To bootstrap an **external** Keycloak, give the Job admin credentials for
-it:
+Bootstrapping an **external** Keycloak works the same way and asks nothing
+of that instance's admin account — whoever owns it creates the realm and
+the bootstrap client, then hands you one client secret:
 
 ```yaml
 keycloak:
   enabled: false
-  adminUser: admin              # that instance's admin
   bootstrap:
     enabled: true
+    clientId: ifric-bootstrap   # created by that Keycloak's owner
 secrets:
-  keycloakAdminPassword: <that admin's password>
+  keycloakBootstrapClientSecret: <from that client's Credentials tab>
 env:
   keycloak:
     url: https://keycloak.example.com
     realm: ifric
 ```
 
-That admin needs realm-creation rights on that instance.
-`secrets.keycloakAdminPassword` is **required** in this combination and the
-render fails without it — unlike the bundled case, where the generated
-password is what creates the admin account, here there is nothing to
-generate: a random value would be one that Keycloak has never heard of, and
-the Job would spend five minutes retrying before failing on authentication.
+`secrets.keycloakAdminPassword` and `keycloak.adminUser` play no part in
+this topology — they apply **only** when the chart installs a fresh
+Keycloak of its own and has to create that new instance's admin account.
+Nothing here should ever hold the admin password of a Keycloak this chart
+does not own.
 
 The two **client** secrets still need nothing from you — the Job pushes
 them onto the clients it creates in your realm, exactly as it does for a
@@ -222,10 +237,13 @@ Left blank here, the backend **fails fast at boot** — deliberately. A
 generated secret would be one Keycloak never heard of, turning a clear
 startup error into logins that fail for no visible reason.
 
-Bundled Keycloak's admin console:
+Admin console of a **freshly installed** Keycloak (`keycloak.enabled=true`
+only — the chart generated this password when it created that instance; an
+existing Keycloak keeps its own admin credentials, which this chart neither
+holds nor needs):
 
 ```bash
-kubectl get secret my-registry-ifric-registry-service-secret \
+kubectl get secret my-registry-ifric-registry-service-keycloak-operator \
   -o jsonpath='{.data.KEYCLOAK_ADMIN_PASSWORD}' | base64 -d
 kubectl port-forward svc/my-registry-ifric-registry-service-keycloak 8080:8080
 ```
@@ -308,11 +326,12 @@ rotate them out from under you.
 |---|---|---|
 | `secrets.keycloakClientSecret` | generated | only with bootstrap on; otherwise you must supply it |
 | `secrets.keycloakAdminClientSecret` | generated | same |
-| `secrets.keycloakAdminPassword` | generated | Keycloak's admin login. Bundled Keycloak: generated, and that value *is* the admin account the chart creates. External Keycloak + bootstrap on: **required** — set it to that instance's real password, or the render fails |
+| `secrets.keycloakAdminPassword` | generated | **Only when this chart installs a fresh Keycloak** (`keycloak.enabled=true`) — the console admin account it creates on first boot, generated and reused across upgrades, rendered into the Keycloak-operator Secret (never the app one). **Ignored entirely with an existing Keycloak** (`keycloak.enabled=false`): this chart never wants, asks for, or uses that instance's admin credential |
+| `secrets.keycloakBootstrapClientSecret` | `""` | **required** when `keycloak.bootstrap.enabled=true`. Secret of the `ifric-bootstrap` client the Job authenticates as. Never generated — the client is created by hand, so only Keycloak knows its secret |
 | `secrets.companyCreationApiKey` | generated | `X-API-Key` gate on `POST /company/create-company` |
 | `secrets.hederaKeySecret` | `""` | optional — blank disables `/certificate/*` entirely |
 | `postgres.auth.password` | `ifric` | provisions the bundled Postgres; must *match* an external one |
-| `secrets.existingSecret` | `""` | your own Secret with keys `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_ADMIN_CLIENT_SECRET`, `HEDERA_KEY_SECRET`, `COMPANY_CREATION_API_KEY`, `DB_PASSWORD`. Overrides all of the above; the chart then creates no Secret |
+| `secrets.existingSecret` | `""` | your own Secret with keys `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_ADMIN_CLIENT_SECRET`, `HEDERA_KEY_SECRET`, `COMPANY_CREATION_API_KEY`, `DB_PASSWORD`, plus `KEYCLOAK_ADMIN_PASSWORD`/`KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` where those apply. Overrides all of the above; the chart then creates no Secret — including the app/operator split, so the backend's `envFrom` will see everything in it |
 
 ### Values
 
@@ -327,7 +346,8 @@ Full list with comments in `values.yaml`; mirrors `backend/.env.example`.
 | `postgres.persistence.enabled` | `true` | `false` is ephemeral — testing only |
 | `env.dbSsl` | `false` | the backend defaults it on; the chart forces it off for the bundled Postgres, which has no TLS listener |
 | `keycloak.enabled` | `true` | `false` needs `env.keycloak.url`/`.realm` |
-| `keycloak.bootstrap.enabled` | `true` | creates realm/clients/mappers; independent of `keycloak.enabled` |
+| `keycloak.bootstrap.enabled` | `true` | creates clients/mappers/realm settings; independent of `keycloak.enabled`. Needs the realm and `bootstrap.clientId` to exist already |
+| `keycloak.bootstrap.clientId` | `ifric-bootstrap` | confidential client the Job authenticates as, in place of Keycloak's admin account |
 | `icid.enabled` | `false` | `true` via `values-full.yaml`; `false` needs `env.icidServiceBackendUrl` |
 | `icid.mongodb.enabled` | `true` | only when ICID is bundled |
 | `seed.enabled` | `true` | both seed Jobs |
@@ -374,7 +394,10 @@ over 63 characters. Release name too long. The chart truncates StatefulSet
 names to 52 to leave room for the `controller-revision-hash` label, so this
 is rare — shorten the release name or set `fullnameOverride`.
 
-**Bootstrap Job can't authenticate.** With an external Keycloak, check that
-`env.keycloak.url` includes the scheme and that `keycloak.adminUser` /
-`secrets.keycloakAdminPassword` are *that* instance's admin credentials,
-not the bundled defaults.
+**Bootstrap Job can't authenticate.** Check that `env.keycloak.url`
+includes the scheme, that the realm `env.keycloak.realm` exists, that
+`keycloak.bootstrap.clientId` exists inside it with client authentication
+ON and service accounts ENABLED, and that
+`secrets.keycloakBootstrapClientSecret` matches that client's Credentials
+tab. The Job cannot create the realm or that client — by design, since
+doing so would mean holding an administrative credential.

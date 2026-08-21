@@ -7,7 +7,9 @@ in anything missing, which is also how a realm that drifted gets repaired.
 
 Not gated on keycloak.enabled — an external Keycloak needs exactly the same
 objects. What changes is only which URL it talks to (the ConfigMap already
-resolves KEYCLOAK_URL both ways) and whose admin credentials it uses.
+resolves KEYCLOAK_URL both ways) and which realm the bootstrap client lives
+in; the credential it uses is a scoped service account either way, so an
+external Keycloak's admin password is never asked for.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -40,15 +42,20 @@ spec:
           imagePullPolicy: {{ .Values.keycloak.image.pullPolicy }}
           command: ["sh", "/scripts/bootstrap.sh"]
           env:
-            # Keycloak's own admin credentials — the bundled instance's, or
-            # your external instance's when keycloak.enabled=false.
-            - name: KEYCLOAK_ADMIN
-              value: {{ .Values.keycloak.adminUser | quote }}
-            - name: KEYCLOAK_ADMIN_PASSWORD
+            # A confidential client whose service account holds
+            # realm-management roles in this one realm — NOT Keycloak's
+            # admin account. The admin password is never handed to this
+            # Job (or to anything else this chart runs): it stays with the
+            # Keycloak instance, and revoking this Job's access is a matter
+            # of deleting one client. The client itself is created by a
+            # human, once — docs/keycloak-first-time-checklist.md.
+            - name: KEYCLOAK_BOOTSTRAP_CLIENT_ID
+              value: {{ .Values.keycloak.bootstrap.clientId | quote }}
+            - name: KEYCLOAK_BOOTSTRAP_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "ifric-registry-service.secretName" . }}
-                  key: KEYCLOAK_ADMIN_PASSWORD
+                  name: {{ include "ifric-registry-service.keycloakOperatorSecretName" . }}
+                  key: KEYCLOAK_BOOTSTRAP_CLIENT_SECRET
           envFrom:
             # KEYCLOAK_URL/REALM/CLIENT_ID/ADMIN_CLIENT_ID from the
             # ConfigMap and the two client secrets from the Secret — the

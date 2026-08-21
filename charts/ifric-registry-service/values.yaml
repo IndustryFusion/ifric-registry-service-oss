@@ -79,7 +79,7 @@ secrets:
   #
   #   bootstrap ON  — blank is fine and is the normal case. The chart
   #     generates a value on first install, reuses it on every later
-  #     upgrade (via `lookup`, same as keycloakAdminPassword), and the
+  #     upgrade (via `lookup`), and the
   #     bootstrap Job pushes that exact value onto the Keycloak client. The
   #     two sides match by construction; nothing to copy.
   #   bootstrap OFF — blank means the backend fails fast at boot
@@ -97,30 +97,59 @@ secrets:
   # the Keycloak client secrets above, this is entirely internal to this
   # chart (no external system to configure first), so leaving it blank
   # auto-generates one on first install and reuses it on every later
-  # `helm upgrade` — same pattern as keycloakAdminPassword below.
-  companyCreationApiKey: ""
-  # Keycloak's own admin-console login password. Whether you have to set it
-  # depends on the topology:
+  # `helm upgrade` — the same generate-once-and-reuse pattern.
+  companyCreationApiKey: "BKVL4Ilxh6QbCW8yC4q43wYc9cn9Ff0h"
+  # Secret of the confidential client the bootstrap Job authenticates as
+  # (keycloak.bootstrap.clientId, default "ifric-bootstrap"). REQUIRED
+  # whenever keycloak.bootstrap.enabled=true — the render fails without it.
   #
-  #   keycloak.enabled=true (bundled) — optional. Leave blank and the chart
-  #     generates one on first install, hands it to the Keycloak Deployment
-  #     as the admin account it creates, and reuses that same value on every
-  #     later `helm upgrade` (via `lookup` against the already-deployed
-  #     Secret), so upgrades never lock you out of the console.
-  #   keycloak.enabled=false + bootstrap.enabled=true — REQUIRED. Set it to
-  #     that external instance's real admin password (see keycloak.adminUser
-  #     for the username): the bootstrap Job signs in with these to create
-  #     the realm and clients there. Nothing can be generated here — a
-  #     random value is one that Keycloak has never heard of — so the render
-  #     fails rather than silently producing a Job that can't authenticate.
-  #   keycloak.enabled=false + bootstrap.enabled=false — ignored. Nothing in
-  #     this chart talks to that Keycloak's admin API.
-  keycloakAdminPassword: "MxOSWFapKSKV40o6hY8pNxT9DT7Pk3s8"
-  # Name of a pre-existing Secret with keys KEYCLOAK_ADMIN_PASSWORD,
-  # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_ADMIN_CLIENT_SECRET, HEDERA_KEY_SECRET,
-  # COMPANY_CREATION_API_KEY, and DB_PASSWORD. When set, the values above
+  # Never generated, unlike the two client secrets above, because the chart
+  # cannot create this client: it is what gives the Job the right to create
+  # clients in the first place. A human creates it once in the console,
+  # Keycloak invents the secret, and you copy it here (steps 1-4 of
+  # docs/keycloak-first-time-checklist.md). Generating one would write a
+  # value Keycloak has never seen and turn a clear render-time failure into
+  # a Job that mysteriously cannot authenticate.
+  #
+  # This deliberately replaces handing the chart Keycloak's admin
+  # credentials: this client's service account holds realm-management roles
+  # in one realm and nothing more — no master realm, no console login — and
+  # is revoked by deleting the client.
+  keycloakBootstrapClientSecret: "9fuPhAa534F2i9Hzizu1LmuAHLGrAY2o"
+  # ONLY APPLIES WHEN THIS CHART INSTALLS A FRESH KEYCLOAK
+  # (keycloak.enabled=true). Ignored completely otherwise.
+  #
+  # A brand-new Keycloak starts with no admin account, so one has to be
+  # created on first boot, and creating an account means setting a
+  # password. This is that password — a NEW value for a NEW instance, the
+  # same as postgres.auth.password below. Leave it blank and the chart
+  # generates one, saves it in the Keycloak-operator Secret (never the
+  # application one), and reuses it on every later upgrade so you are not
+  # locked out of the console. Set it only if you want to choose the value
+  # yourself.
+  #
+  # It is NEVER the admin password of a Keycloak that already exists. With
+  # keycloak.enabled=false — pointing at your own or another team's
+  # instance — this chart does not want, ask for, or have any use for that
+  # instance's admin credentials: the bootstrap Job authenticates as
+  # keycloak.bootstrap.clientId's service account instead. See
+  # keycloakBootstrapClientSecret above.
+  #
+  # Do not commit a real value here.
+  keycloakAdminPassword: ""
+  # Name of a pre-existing Secret with keys KEYCLOAK_CLIENT_SECRET,
+  # KEYCLOAK_ADMIN_CLIENT_SECRET, HEDERA_KEY_SECRET,
+  # COMPANY_CREATION_API_KEY, DB_PASSWORD, plus KEYCLOAK_ADMIN_PASSWORD
+  # (only when this chart installs a fresh Keycloak, keycloak.enabled=true)
+  # and KEYCLOAK_BOOTSTRAP_CLIENT_SECRET
+  # (only when keycloak.bootstrap.enabled=true). When set, the values above
   # (and postgres.auth.password) are ignored and this chart creates no
   # Secret of its own.
+  #
+  # Note this collapses the app/Keycloak-operator split back into one
+  # Secret, so the backend's envFrom will see the Keycloak credentials in
+  # it too. Point it at a Secret holding only what the app needs, or keep
+  # the chart-managed Secrets, if that matters to you.
   existingSecret: ""
 
 resources: {}
@@ -240,11 +269,12 @@ keycloak:
     repository: quay.io/keycloak/keycloak
     tag: "26.0"
     pullPolicy: IfNotPresent
-  # Keycloak's own admin-console login username — see
-  # secrets.keycloakAdminPassword for the password. Used by the bundled
-  # instance AND, when bootstrap.enabled=true with keycloak.enabled=false,
-  # as the credentials the bootstrap Job authenticates to your *external*
-  # Keycloak with (it needs realm-creation rights there).
+  # ONLY APPLIES WHEN THIS CHART INSTALLS A FRESH KEYCLOAK
+  # (keycloak.enabled=true): the console admin username it creates on first
+  # boot, alongside secrets.keycloakAdminPassword. The bootstrap Job does
+  # not use it (it authenticates as bootstrap.clientId's service account),
+  # and an existing Keycloak's admin account is never touched by this chart
+  # at all.
   adminUser: admin
 
   # One-time setup Job (templates/keycloak/bootstrap-job.yaml) that creates
@@ -266,6 +296,13 @@ keycloak:
   # docs/keycloak-setup.md, and you must supply both client secrets.
   bootstrap:
     enabled: true
+    # The confidential client the Job authenticates as. Its service account
+    # needs the realm-management roles manage-clients, manage-realm and
+    # manage-users in env.keycloak.realm — and nothing else. Created once by
+    # hand along with the realm (docs/keycloak-first-time-checklist.md),
+    # because a Job that can create clients has to come from somewhere, and
+    # that somewhere should not be the identity provider's root account.
+    clientId: ifric-bootstrap
     # Applies to the Job itself. Keycloak can take a while to accept
     # connections on a cold start; the Job already waits for it internally,
     # so this only covers a genuinely failed run.

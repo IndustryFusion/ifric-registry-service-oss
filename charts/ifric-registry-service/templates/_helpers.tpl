@@ -54,6 +54,23 @@ either a user-supplied existing Secret, or the one this chart creates.
 {{- end -}}
 
 {{/*
+Name of the Secret holding the credentials that operate Keycloak itself —
+KEYCLOAK_ADMIN_PASSWORD (the console admin the bundled Deployment creates)
+and KEYCLOAK_BOOTSTRAP_CLIENT_SECRET (the service account the bootstrap Job
+authenticates as). Deliberately NOT the app Secret above: the backend
+mounts that one wholesale with envFrom, so anything left in it ends up in
+the environment of the internet-facing application process. The backend
+needs neither of these and must never carry them.
+*/}}
+{{- define "ifric-registry-service.keycloakOperatorSecretName" -}}
+{{- if .Values.secrets.existingSecret -}}
+{{- .Values.secrets.existingSecret -}}
+{{- else -}}
+{{- printf "%s-keycloak-operator" (include "ifric-registry-service.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 In-cluster Postgres Service host (matches the postgres StatefulSet's
 Service name — see templates/postgres/service.yaml). Only meaningful when
 .Values.postgres.enabled is true — use postgresHostResolved/

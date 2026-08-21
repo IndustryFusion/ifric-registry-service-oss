@@ -36,36 +36,58 @@ data:
 
     echo "==> Keycloak bootstrap for realm '${KEYCLOAK_REALM}' at ${KEYCLOAK_URL}"
 
+    # Authenticates as a confidential client in this realm, whose service
+    # account holds realm-management roles and nothing else — deliberately
+    # not as Keycloak's admin account. That credential is never given to
+    # this chart: this Job cannot reach the master realm or any other
+    # realm, cannot sign in to the console, and is revoked by deleting one
+    # client. The trade is that the client (and therefore the realm it
+    # lives in) has to exist first — created once by a human, see
+    # docs/keycloak-first-time-checklist.md.
+    #
     # Keycloak may still be starting (it waits on Postgres itself), and an
     # external one may be briefly unreachable. Retry rather than fail the
     # release on a cold start.
     attempt=0
     until kc config credentials \
             --server "${KEYCLOAK_URL}" \
-            --realm master \
-            --user "${KEYCLOAK_ADMIN}" \
-            --password "${KEYCLOAK_ADMIN_PASSWORD}" >/dev/null 2>&1; do
+            --realm "${KEYCLOAK_REALM}" \
+            --client "${KEYCLOAK_BOOTSTRAP_CLIENT_ID}" \
+            --secret "${KEYCLOAK_BOOTSTRAP_CLIENT_SECRET}" >/dev/null 2>&1; do
       attempt=$((attempt + 1))
       if [ "$attempt" -ge 60 ]; then
-        echo "!! Could not authenticate to Keycloak at ${KEYCLOAK_URL} after 5 minutes."
-        echo "   Bundled Keycloak: check its Pod and its wait-for-postgres initContainer."
-        echo "   External Keycloak: check env.keycloak.url (it must include the scheme,"
-        echo "   e.g. http://host:8080) and that keycloak.adminUser /"
-        echo "   secrets.keycloakAdminPassword are that instance's admin credentials."
+        echo "!! Could not authenticate to Keycloak at ${KEYCLOAK_URL} as client"
+        echo "   '${KEYCLOAK_BOOTSTRAP_CLIENT_ID}' in realm '${KEYCLOAK_REALM}' after 5 minutes."
+        echo "   Reachability — bundled Keycloak: check its Pod and its"
+        echo "   wait-for-postgres initContainer. External: check env.keycloak.url"
+        echo "   (it must include the scheme, e.g. http://host:8080)."
+        echo "   Credentials — the realm and the client are a one-time manual step;"
+        echo "   this Job cannot create them, by design. Check that realm"
+        echo "   '${KEYCLOAK_REALM}' exists, that client '${KEYCLOAK_BOOTSTRAP_CLIENT_ID}' exists in it"
+        echo "   with client authentication ON and service accounts ENABLED, and that"
+        echo "   secrets.keycloakBootstrapClientSecret matches its Credentials tab."
+        echo "   Steps: docs/keycloak-first-time-checklist.md"
         exit 1
       fi
       echo "   waiting for keycloak... (${attempt}/60)"
       sleep 5
     done
-    echo "==> Authenticated as ${KEYCLOAK_ADMIN}"
+    echo "==> Authenticated as service account of '${KEYCLOAK_BOOTSTRAP_CLIENT_ID}'"
 
     # --- realm ---------------------------------------------------------
-    if kc get "realms/${KEYCLOAK_REALM}" >/dev/null 2>&1; then
-      echo "==> Realm '${KEYCLOAK_REALM}' already exists"
-    else
-      kc create realms -s realm="${KEYCLOAK_REALM}" -s enabled=true
-      echo "==> Created realm '${KEYCLOAK_REALM}'"
+    # Not created here: a client-scoped service account has no rights in
+    # the master realm, so realm creation is one of the two things left to
+    # the human who sets up the bootstrap client. Fail clearly instead of
+    # letting every subsequent call 403.
+    if ! kc get "realms/${KEYCLOAK_REALM}" >/dev/null 2>&1; then
+      echo "!! Authenticated, but realm '${KEYCLOAK_REALM}' could not be read."
+      echo "   Either it does not exist, or the service account of"
+      echo "   '${KEYCLOAK_BOOTSTRAP_CLIENT_ID}' is missing its realm-management roles"
+      echo "   (manage-clients, manage-realm, manage-users). Both are step 3 of"
+      echo "   docs/keycloak-first-time-checklist.md."
+      exit 1
     fi
+    echo "==> Realm '${KEYCLOAK_REALM}' present"
 
     # --- realm user profile ---------------------------------------------
     # A non-obvious default in Keycloak 24+ that silently breaks this app on

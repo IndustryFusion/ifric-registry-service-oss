@@ -46,10 +46,13 @@ spec:
           env:
             - name: KEYCLOAK_ADMIN
               value: {{ .Values.keycloak.adminUser | quote }}
+            # From the Keycloak-operator Secret, not the application one —
+            # see templates/keycloak/operator-secret.yaml for why they are
+            # kept apart.
             - name: KEYCLOAK_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "ifric-registry-service.secretName" . }}
+                  name: {{ include "ifric-registry-service.keycloakOperatorSecretName" . }}
                   key: KEYCLOAK_ADMIN_PASSWORD
             - name: KC_DB
               value: postgres
