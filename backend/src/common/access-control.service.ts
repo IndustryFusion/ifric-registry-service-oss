@@ -34,9 +34,10 @@ export type Permission = 'create' | 'read' | 'update' | 'delete';
  *   2. the caller's one AccessGroup role (via UserAccessGroup) actually
  *      grants the permission being exercised
  *
- * Tokens minted by the separate "data-space" client carry neither claim —
- * only participant_id — so resolveClaims normalizes them into the same
- * shape before either check runs. That normalization is the single place
+ * Tokens minted by the dataspace data-sharing app's own client
+ * ("dataspace-ifric-reader") carry neither claim — only participant_id —
+ * so resolveClaims normalizes them into the same shape before either
+ * check runs. That normalization is the single place
  * the two token formats differ; every call site sees one shape.
  */
 @Injectable()
@@ -94,17 +95,29 @@ export class AccessControlService {
     };
   }
 
+  // The single definition of "is this the caller's own company", so the
+  // throwing and non-throwing forms can never drift apart.
+  //
   // A missing claim means the caller's token predates the protocol-mapper
   // migration (or the backfill script hasn't run for their account yet) —
-  // treated as a hard failure, never as an implicit bypass.
+  // it is never "own", so a caller cannot reach a company's full record by
+  // omitting the claim; they fall to whatever the call site does for a
+  // foreign company (a 403, or a public projection).
+  isOwnCompany(claims: AuthTokenClaims, targetCompanyIfricId: string): boolean {
+    return (
+      !!claims.company_ifric_id &&
+      claims.company_ifric_id === targetCompanyIfricId
+    );
+  }
+
+  // Hard denial for endpoints that expose nothing at all across the company
+  // boundary. Reads that instead degrade to a public projection should call
+  // isOwnCompany directly rather than catching this.
   assertCompanyMatch(
     claims: AuthTokenClaims,
     targetCompanyIfricId: string,
   ): void {
-    if (
-      !claims.company_ifric_id ||
-      claims.company_ifric_id !== targetCompanyIfricId
-    ) {
+    if (!this.isOwnCompany(claims, targetCompanyIfricId)) {
       throw new ForbiddenException(
         "Caller's company does not match the requested company",
       );

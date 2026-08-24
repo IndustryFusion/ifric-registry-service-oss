@@ -234,6 +234,7 @@ data:
     fi
 
     echo "==> Keycloak bootstrap complete."
-    echo "    The dataspace 'data-space' client is NOT created here — it belongs"
-    echo "    to that team and lives in this same realm. See docs/keycloak-setup.md."
+    echo "    The dataspace data-sharing app's own client, 'dataspace-ifric-reader',"
+    echo "    is NOT created here — it lives in this same realm but is configured"
+    echo "    alongside that app. See docs/keycloak-setup.md."
 {{- end }}

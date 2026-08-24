@@ -191,9 +191,10 @@ themselves; every credential operation goes through `KeycloakService`
   `request.user` — see the dataspace note below. Signature and realm
   issuer are the only things checked; `azp`/`aud` deliberately are not, so
   any client in the realm authenticates here.
-- **Dataspace (`data-space` client) tokens** — a third client in the same
-  realm, owned by another team, issues tokens carrying `participant_id`
-  instead of `company_ifric_id`/`user_id`. A company onboarded from IFRIC
+- **Dataspace (`dataspace-ifric-reader` client) tokens** — a third client
+  in the same realm, belonging to the dataspace data-sharing management
+  app, issues tokens carrying `participant_id` instead of
+  `company_ifric_id`/`user_id`. A company onboarded from IFRIC
   has its `participant_id` set to a verbatim copy of its
   `company_ifric_id`, so `resolveClaims` matches the claim against
   `Company` and aliases it into the `company_ifric_id` slot — there is no

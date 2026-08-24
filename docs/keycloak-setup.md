@@ -130,13 +130,14 @@ Affected users need to log in again (or refresh) afterward to get a token
 carrying the new claims — an already-issued token doesn't retroactively
 gain them.
 
-## Dataspace participants (the `data-space` client)
+## Dataspace participants (the `dataspace-ifric-reader` client)
 
-A separate application — the dataspace — runs its own **confidential client
-in this same realm**, configured by that team, not by this setup. Its
-tokens carry a `participant_id` claim and its own RBAC runs entirely off
-that claim; it needs nothing from this service. Do not create or manage
-that client here.
+The dataspace data-sharing management app runs its own **confidential
+client in this same realm**, `dataspace-ifric-reader`, configured
+alongside that app rather than by this setup. Its tokens carry a
+`participant_id` claim and its own RBAC runs entirely off that claim; it
+needs nothing from this service. Don't create or manage that client from
+here — it belongs to that application, not to this one.
 
 Two properties make its tokens usable against this service:
 
@@ -154,7 +155,7 @@ So a request is authorized if it carries **either** claim set:
 | Token from | Claims | How it authorizes |
 | --- | --- | --- |
 | `ifric` | `company_ifric_id` + `user_id` | unchanged: company match, then role check |
-| `data-space` | `participant_id` | matched against `Company`, aliased into `company_ifric_id`, **role check skipped** |
+| `dataspace-ifric-reader` | `participant_id` | matched against `Company`, aliased into `company_ifric_id`, **role check skipped** |
 
 `AccessControlService.resolveClaims` does that normalization once, in
 `AuthGuard`, so nothing downstream knows which client issued the token.
@@ -255,7 +256,7 @@ A few things worth noting from this picture:
   above for the one case this happens (pre-migration accounts). The single
   deliberate exception is a `participant_id` that resolved to a real
   `Company`, which skips the role check only — see
-  [Dataspace participants](#dataspace-participants-the-data-space-client).
+  [Dataspace participants](#dataspace-participants-the-dataspace-ifric-reader-client).
 - **`resolveClaims` runs in `AuthGuard`, not at the call sites.** That is
   what keeps the two token formats from leaking into ~30 authorization
   checks: normalize once at the boundary, and everything downstream sees a

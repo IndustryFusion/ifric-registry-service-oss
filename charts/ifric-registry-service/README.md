@@ -252,20 +252,21 @@ kubectl port-forward svc/my-registry-ifric-registry-service-keycloak 8080:8080
 
 ## Dataspace participants
 
-The dataspace is a separate application with **its own client in this same
-realm**, owned by that team. This chart doesn't create it — it isn't ours.
+The dataspace data-sharing management app is a separate application with
+**its own client in this same realm**. This chart doesn't create it — it
+isn't this service's client.
 
-| Client | Owned by | Its mappers | Claims in its tokens |
+| Client | Belongs to | Its mappers | Claims in its tokens |
 |---|---|---|---|
 | `ifric` | this chart's bootstrap Job | `company_ifric_id`, `user_id` | those two |
-| `data-space` | the dataspace team | `participant_id` | that one |
+| `dataspace-ifric-reader` | the dataspace data-sharing app | `participant_id` | that one |
 
 Why the split works cleanly:
 
 - **Attributes** live on the user account and are shared realm-wide.
 - **Mappers** live on a client and control only *that client's* tokens.
-- So neither team's mappers affect the other's tokens, and neither needs
-  anything from the other.
+- So neither client's mappers affect the other's tokens, and neither app
+  needs anything from the other.
 
 This service accepts **either** token. A company onboarded into the
 dataspace gets a `participant_id` that is a verbatim copy of its
@@ -275,7 +276,7 @@ the dataspace's own registry match nothing here and are denied.
 
 Nothing to configure. Full behaviour — including which endpoints a
 participant token reaches — is in
-[`docs/keycloak-setup.md`](../../docs/keycloak-setup.md#dataspace-participants-the-data-space-client).
+[`docs/keycloak-setup.md`](../../docs/keycloak-setup.md#dataspace-participants-the-dataspace-ifric-reader-client).
 
 ---
 

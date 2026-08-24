@@ -25,7 +25,8 @@
 export interface AuthTokenClaims {
   company_ifric_id?: string;
   user_id?: string;
-  // Projected by the separate "data-space" client's own mapper, not ours.
+  // Projected by the dataspace data-sharing app's own client
+  // ("dataspace-ifric-reader") mapper, not ours.
   // For a company onboarded into the dataspace from IFRIC, this is a
   // verbatim copy of its company_ifric_id — see
   // AccessControlService.resolveClaims. Participants that originated

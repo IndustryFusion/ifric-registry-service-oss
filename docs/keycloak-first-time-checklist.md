@@ -283,11 +283,12 @@ npm run backfill:keycloak-attributes
 If you turned `Verify Profile` off on an older release, you can turn it back
 on once this has run.
 
-## Not your job
+## Not this app's client
 
-The dataspace's `data-space` client lives in this same realm but is owned
-by that team — don't create or manage it here. See
-[`keycloak-setup.md`](keycloak-setup.md#dataspace-participants-the-data-space-client).
+The dataspace data-sharing management app has its own client in this same
+realm, `dataspace-ifric-reader`. It is configured alongside that app —
+don't create or manage it from here. See
+[`keycloak-setup.md`](keycloak-setup.md#dataspace-participants-the-dataspace-ifric-reader-client).
 
 ## 9. Realm SMTP — required for password recovery
 
