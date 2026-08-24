@@ -1,6 +1,6 @@
-# Ifric Registry Service
+# IFRIC (IndustryFusion Registry for Identification and Certification) Service
 
-Ifric Registry Service is an open-source, multi-tenant registry for
+IFRIC Registry Service is an open-source, multi-tenant registry for
 companies, users, role-based access control, physical/IoT assets, and
 digital twins. It's built with [NestJS](https://nestjs.com/) and
 PostgreSQL (via [TypeORM](https://typeorm.io/)). Authentication has no
