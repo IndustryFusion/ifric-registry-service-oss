@@ -90,7 +90,10 @@ describe('CompanyService', () => {
   };
   let accessGroupRepository: {
     find: jest.Mock;
+    findOne: jest.Mock;
     create: jest.Mock;
+    save: jest.Mock;
+    update: jest.Mock;
     delete: jest.Mock;
   };
   let userAccessGroupRepository: { delete: jest.Mock };
@@ -153,7 +156,10 @@ describe('CompanyService', () => {
     };
     accessGroupRepository = {
       find: jest.fn(),
+      findOne: jest.fn(),
       create: jest.fn((x) => x),
+      save: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       delete: jest.fn(),
     };
     userAccessGroupRepository = { delete: jest.fn() };
@@ -246,10 +252,10 @@ describe('CompanyService', () => {
 
   describe('addStatusDetail', () => {
     it('looks the company up by company_ifric_id, not the removed external_account_ref field', async () => {
-      await service.addStatusDetail({
-        company_id: 'urn:ifric:ifx-eur-com-own-1',
-        status: 'Verified',
-      });
+      await service.addStatusDetail(
+        { company_id: 'urn:ifric:ifx-eur-com-own-1', status: 'Verified' },
+        authorizedUser,
+      );
 
       expect(companyRepository.update).toHaveBeenCalledWith(
         { company_ifric_id: 'urn:ifric:ifx-eur-com-own-1' },
@@ -1188,6 +1194,112 @@ describe('CompanyService', () => {
         service.getFactories(undefined, authorizedUser),
       ).rejects.toMatchObject({ status: 403 });
       expect(factoryRepository.find).not.toHaveBeenCalled();
+    });
+  });
+  // Write-side privilege escalation: these took no caller identity, so any
+  // authenticated user could rewrite another company's RBAC table or set
+  // its verification status.
+  describe('company scoping on RBAC and status writes', () => {
+    const denyCompanyMatch = () =>
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new HttpException('Forbidden', 403);
+      });
+
+    it('addStatusDetail rejects marking another company verified', async () => {
+      denyCompanyMatch();
+
+      await expect(
+        service.addStatusDetail(
+          { company_id: 'urn:ifric:other-company', status: 'Verified' },
+          authorizedUser,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(companyRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('addStatusDetail requires update permission on your own company', async () => {
+      accessControlService.assertPermission.mockRejectedValue(
+        new HttpException('No update permission', 403),
+      );
+
+      await expect(
+        service.addStatusDetail(
+          { company_id: 'urn:ifric:owner-1', status: 'Verified' },
+          authorizedUser,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(companyRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('createAccessGroup rejects creating a role in another company', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-2' }]);
+      denyCompanyMatch();
+
+      await expect(
+        service.createAccessGroup(
+          'urn:ifric:other-company',
+          { group_name: 'admin' } as any,
+          authorizedUser,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(accessGroupRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('updateAccessGroup rejects a role owned by another company', async () => {
+      accessGroupRepository.findOne.mockResolvedValue({
+        _id: 'ag-1',
+        company_id: 'company-2',
+      });
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-2',
+        company_ifric_id: 'urn:ifric:other-company',
+      });
+      denyCompanyMatch();
+
+      await expect(
+        service.updateAccessGroup(
+          'ag-1',
+          { read: true } as any,
+          authorizedUser,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(accessGroupRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('deleteAccessgroup rejects a role owned by another company', async () => {
+      accessGroupRepository.findOne.mockResolvedValue({
+        _id: 'ag-1',
+        company_id: 'company-2',
+      });
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-2',
+        company_ifric_id: 'urn:ifric:other-company',
+      });
+      denyCompanyMatch();
+
+      await expect(
+        service.deleteAccessgroup('ag-1', authorizedUser),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(accessGroupRepository.delete).not.toHaveBeenCalled();
+    });
+
+    // An access group whose company row has vanished must not fall through
+    // the check — '' can never match a real claim.
+    it('denies when the access group company cannot be resolved', async () => {
+      accessGroupRepository.findOne.mockResolvedValue({
+        _id: 'ag-1',
+        company_id: 'gone',
+      });
+      companyRepository.findOne.mockResolvedValue(null);
+
+      await service
+        .deleteAccessgroup('ag-1', authorizedUser)
+        .catch(() => undefined);
+
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        '',
+      );
     });
   });
 });

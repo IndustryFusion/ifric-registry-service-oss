@@ -480,7 +480,10 @@ describe('AuthService', () => {
         user_email: 'user@example.com',
       });
 
-      await service.deleteCompanyUser('user-1');
+      await service.deleteCompanyUser('user-1', {
+        company_ifric_id: 'urn:ifric:company-1',
+        user_id: 'caller-1',
+      });
 
       expect(keycloakService.deleteUser).toHaveBeenCalledWith(
         'user@example.com',
@@ -664,7 +667,11 @@ describe('AuthService', () => {
       accessGroupRepository.find.mockResolvedValue([{ _id: 'ag-1' }]);
       userAccessGroupRepository.query.mockResolvedValue({});
 
-      await service.updateUserAccessGroup('user-1', { user_role: 'admin' });
+      await service.updateUserAccessGroup(
+        'user-1',
+        { user_role: 'admin' },
+        { company_ifric_id: 'urn:ifric:company-1', user_id: 'caller-1' },
+      );
 
       expect(userAccessGroupRepository.query).toHaveBeenCalledWith(
         expect.stringContaining('ON CONFLICT'),
@@ -772,6 +779,164 @@ describe('AuthService', () => {
         caller,
         '',
       );
+    });
+  });
+  // Write-side counterparts to the read scoping above. These took no caller
+  // identity at all, so any authenticated user could manage users and roles
+  // in any company.
+  describe('company scoping on user writes', () => {
+    const caller = {
+      company_ifric_id: 'urn:ifric:company-1',
+      user_id: 'caller-1',
+    };
+    const targetUser = { _id: 'user-9', company_id: 'company-2' };
+
+    const denyCompanyMatch = () =>
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new ForbiddenException('mismatch');
+      });
+
+    // The sharpest one: this writes UserAccessGroup, i.e. it assigns a
+    // user's role.
+    it('updateUserAccessGroup rejects a target user in another company', async () => {
+      companyUserRepository.findOne.mockResolvedValue(targetUser);
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-2',
+        company_ifric_id: 'urn:ifric:other-company',
+      });
+      denyCompanyMatch();
+
+      await expect(
+        service.updateUserAccessGroup('user-9', { user_role: 'admin' }, caller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userAccessGroupRepository.query).not.toHaveBeenCalled();
+    });
+
+    // No self-exemption: granting yourself a role is the escalation being
+    // closed, so 'update' is required even when acting on your own user.
+    it('updateUserAccessGroup requires update permission, not just a company match', async () => {
+      companyUserRepository.findOne.mockResolvedValue({
+        _id: 'caller-1',
+        company_id: 'company-1',
+      });
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-1',
+        company_ifric_id: 'urn:ifric:company-1',
+      });
+      accessControlService.assertPermission.mockRejectedValue(
+        new ForbiddenException('No update permission'),
+      );
+
+      await expect(
+        service.updateUserAccessGroup(
+          'caller-1',
+          { user_role: 'admin' },
+          caller,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userAccessGroupRepository.query).not.toHaveBeenCalled();
+    });
+
+    it('deleteCompanyUser rejects a target user in another company', async () => {
+      companyUserRepository.findOne.mockResolvedValue({
+        ...targetUser,
+        user_email: 'someone@other.example',
+      });
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-2',
+        company_ifric_id: 'urn:ifric:other-company',
+      });
+      denyCompanyMatch();
+
+      await expect(service.deleteCompanyUser('user-9', caller)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(keycloakService.deleteUser).not.toHaveBeenCalled();
+      expect(companyUserRepository.delete).not.toHaveBeenCalled();
+    });
+
+    it('updateCompanyUser rejects a caller from another company', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-2' }]);
+      denyCompanyMatch();
+
+      await expect(
+        service.updateCompanyUser(
+          {
+            company_ifric_id: 'urn:ifric:other-company',
+            user_id: 'user-9',
+            user_name: 'Renamed',
+          } as any,
+          caller,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    // company_ifric_id is caller-supplied, so a matching claim alone does
+    // not prove the target user belongs to that company.
+    it('updateCompanyUser rejects a target user belonging to a different company', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      companyUserRepository.findOne.mockResolvedValue(targetUser);
+
+      await expect(
+        service.updateCompanyUser(
+          {
+            company_ifric_id: 'urn:ifric:company-1',
+            user_id: 'user-9',
+            user_name: 'Renamed',
+          } as any,
+          caller,
+        ),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    // A read_only user must still be able to edit their own profile and
+    // change their own password through this endpoint.
+    it('updateCompanyUser lets a user edit themselves without update permission', async () => {
+      companyRepository.find.mockResolvedValue([
+        { _id: 'company-1', email: 'admin@example.com' },
+      ]);
+      companyUserRepository.findOne.mockResolvedValue({
+        _id: 'caller-1',
+        company_id: 'company-1',
+        user_email: 'caller@example.com',
+      });
+      accessControlService.assertPermission.mockRejectedValue(
+        new ForbiddenException('No update permission'),
+      );
+
+      await service.updateCompanyUser(
+        {
+          company_ifric_id: 'urn:ifric:company-1',
+          user_id: 'caller-1',
+          user_name: 'My New Name',
+        } as any,
+        caller,
+      );
+
+      expect(accessControlService.assertPermission).not.toHaveBeenCalled();
+    });
+
+    it('updateCompanyUser requires update permission to edit somebody else', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      companyUserRepository.findOne.mockResolvedValue({
+        _id: 'user-9',
+        company_id: 'company-1',
+        user_email: 'someone@example.com',
+      });
+      accessControlService.assertPermission.mockRejectedValue(
+        new ForbiddenException('No update permission'),
+      );
+
+      await expect(
+        service.updateCompanyUser(
+          {
+            company_ifric_id: 'urn:ifric:company-1',
+            user_id: 'user-9',
+            user_name: 'Renamed',
+          } as any,
+          caller,
+        ),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

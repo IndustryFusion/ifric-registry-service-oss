@@ -32,7 +32,10 @@ import {
   UserAccessGroup,
 } from 'src/entities';
 import { KeycloakService } from './keycloak.service';
-import { AccessControlService } from 'src/common/access-control.service';
+import {
+  AccessControlService,
+  Permission,
+} from 'src/common/access-control.service';
 import { AuthTokenClaims } from './auth-token-claims.interface';
 import * as generator from 'generate-password';
 import * as dotenv from 'dotenv';
@@ -276,6 +279,7 @@ export class AuthService {
   private async assertCallerOwnsUsersCompany(
     user: CompanyUser,
     authUser: AuthTokenClaims,
+    permission: Permission = 'read',
   ): Promise<void> {
     const company = await this.companyRepository.findOne({
       where: { _id: user.company_id },
@@ -284,7 +288,7 @@ export class AuthService {
       authUser,
       company?.company_ifric_id ?? '',
     );
-    await this.accessControlService.assertPermission(authUser, 'read');
+    await this.accessControlService.assertPermission(authUser, permission);
   }
 
   async getIndexedData(data: FindIndexedDbAuthDto) {
@@ -703,12 +707,26 @@ export class AuthService {
     }
   }
 
-  async updateUserAccessGroup(id: string, data: UpdateUserAccessDto) {
+  // This writes UserAccessGroup, i.e. it assigns a user's RBAC role. With
+  // no caller identity it let anyone grant themselves any role in any
+  // company — the sharpest privilege escalation in the service. There is
+  // deliberately no self-exemption here: changing your own role is exactly
+  // the escalation being closed, so 'update' is required either way.
+  async updateUserAccessGroup(
+    id: string,
+    data: UpdateUserAccessDto,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const companyUserResponse = await this.companyUserRepository.findOne({
         where: { _id: id },
       });
       if (companyUserResponse) {
+        await this.assertCallerOwnsUsersCompany(
+          companyUserResponse,
+          authUser,
+          'update',
+        );
         const companyId = companyUserResponse.company_id;
         const accessGroupData = await this.accessGroupRepository.find({
           where: { company_id: companyId, group_name: data.user_role },
@@ -754,7 +772,7 @@ export class AuthService {
     }
   }
 
-  async updateCompanyUser(data: UpdateUserDetails) {
+  async updateCompanyUser(data: UpdateUserDetails, authUser: AuthTokenClaims) {
     try {
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: data.company_ifric_id },
@@ -766,12 +784,29 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(
+        authUser,
+        data.company_ifric_id,
+      );
 
       const companyUserResponse = await this.companyUserRepository.findOne({
         where: { _id: data.user_id },
       });
       if (!companyUserResponse) {
         throw new HttpException('User Not Found', HttpStatus.NOT_FOUND);
+      }
+      // company_ifric_id is caller-supplied, so a matching claim alone does
+      // not prove the *target user* belongs to that company — check the row.
+      if (companyUserResponse.company_id !== companyData[0]._id) {
+        throw new HttpException('User Not Found', HttpStatus.NOT_FOUND);
+      }
+      // Editing your own profile (including your own password, via the
+      // old_password branch below) stays available to every user; editing
+      // somebody else's is a management action and needs the permission.
+      // Without this split a read_only user could no longer change their
+      // own password here.
+      if (authUser.user_id !== companyUserResponse._id) {
+        await this.accessControlService.assertPermission(authUser, 'update');
       }
 
       if (data.old_password && data.new_password) {
@@ -871,12 +906,17 @@ export class AuthService {
     }
   }
 
-  async deleteCompanyUser(id: string) {
+  async deleteCompanyUser(id: string, authUser: AuthTokenClaims) {
     try {
       const companyUser = await this.companyUserRepository.findOne({
         where: { _id: id },
       });
       if (companyUser) {
+        await this.assertCallerOwnsUsersCompany(
+          companyUser,
+          authUser,
+          'delete',
+        );
         await this.keycloakService.deleteUser(companyUser.user_email);
       }
       await this.userAccessGroupRepository.delete({ user_id: id });

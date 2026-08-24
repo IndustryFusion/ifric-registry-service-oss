@@ -45,7 +45,10 @@ import { CreateFactoryDto } from './dto/create-factory.dto';
 import { UpdateFactoryDto } from './dto/update-factory.dto';
 import { envConstants } from 'src/common/env.constants';
 import { generateId } from 'src/database/generate-id';
-import { AccessControlService } from 'src/common/access-control.service';
+import {
+  AccessControlService,
+  Permission,
+} from 'src/common/access-control.service';
 import { PublicCompanyService } from 'src/common/public-company.service';
 import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 
@@ -619,7 +622,13 @@ export class CompanyService {
     }
   }
 
-  async createAccessGroup(id: string, data: AccessGroupDto) {
+  // Access groups are the RBAC table itself, so writing one for another
+  // company is a direct grant of permissions inside that company.
+  async createAccessGroup(
+    id: string,
+    data: AccessGroupDto,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const response = await this.companyRepository.find({
         where: { company_ifric_id: id },
@@ -630,6 +639,8 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'create');
 
       data.company_id = response[0]._id;
       const checkAccessGroup = await this.accessGroupRepository.find({
@@ -661,8 +672,14 @@ export class CompanyService {
     }
   }
 
-  async addStatusDetail(data: AddStatusDto) {
+  // data.company_id is a company_ifric_id despite the name. This used to
+  // take no caller identity at all, so any authenticated user could set any
+  // company's verification status.
+  async addStatusDetail(data: AddStatusDto, authUser: AuthTokenClaims) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, data.company_id);
+      await this.accessControlService.assertPermission(authUser, 'update');
+
       await this.companyRepository.update(
         { company_ifric_id: data.company_id },
         { company_verified: data.status.toLowerCase() },
@@ -685,9 +702,12 @@ export class CompanyService {
 
   // Access groups are keyed on Company._id, not company_ifric_id, so the
   // boundary has to be recovered from the row before it can be asserted.
+  // A row whose company has vanished falls through to '', which can never
+  // match a real claim — missing context denies rather than skips.
   private async assertCallerOwnsCompanyRecord(
     companyId: string | undefined,
     authUser: AuthTokenClaims,
+    permission: Permission = 'read',
   ): Promise<void> {
     const company = companyId
       ? await this.companyRepository.findOne({ where: { _id: companyId } })
@@ -696,7 +716,7 @@ export class CompanyService {
       authUser,
       company?.company_ifric_id ?? '',
     );
-    await this.accessControlService.assertPermission(authUser, 'read');
+    await this.accessControlService.assertPermission(authUser, permission);
   }
 
   async getCompanyAccessGroup(id: string, authUser: AuthTokenClaims) {
@@ -1523,8 +1543,27 @@ export class CompanyService {
     }
   }
 
-  async updateAccessGroup(id: string, data: UpdateAccessGroupDto) {
+  async updateAccessGroup(
+    id: string,
+    data: UpdateAccessGroupDto,
+    authUser: AuthTokenClaims,
+  ) {
     try {
+      const accessGroup = await this.accessGroupRepository.findOne({
+        where: { _id: id },
+      });
+      if (!accessGroup) {
+        throw new HttpException(
+          'Specified Access Group Not Found',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      await this.assertCallerOwnsCompanyRecord(
+        accessGroup.company_id,
+        authUser,
+        'update',
+      );
+
       const result = await this.accessGroupRepository.update({ _id: id }, data);
       if (!(result.affected > 0)) {
         throw new HttpException(
@@ -1603,8 +1642,19 @@ export class CompanyService {
     }
   }
 
-  async deleteAccessgroup(id: string) {
+  async deleteAccessgroup(id: string, authUser: AuthTokenClaims) {
     try {
+      const accessGroup = await this.accessGroupRepository.findOne({
+        where: { _id: id },
+      });
+      if (!accessGroup) {
+        return { affected: 0 };
+      }
+      await this.assertCallerOwnsCompanyRecord(
+        accessGroup.company_id,
+        authUser,
+        'delete',
+      );
       return await this.accessGroupRepository.delete({ _id: id });
     } catch (err) {
       if (err instanceof HttpException) {

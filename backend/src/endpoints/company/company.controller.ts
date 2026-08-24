@@ -459,8 +459,12 @@ export class CompanyController {
       ],
     },
   })
-  createAccessGroup(@Param('id') id: string, @Body() data: AccessGroupDto) {
-    return this.companyService.createAccessGroup(id, data);
+  createAccessGroup(
+    @Param('id') id: string,
+    @Body() data: AccessGroupDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.createAccessGroup(id, data, authUser);
   }
 
   @UseGuards(CompanyCreationApiKeyGuard)
@@ -589,8 +593,11 @@ export class CompanyController {
       required: ['company_id', 'status'],
     },
   })
-  addStatusDetail(@Body() data: AddStatusDto) {
-    return this.companyService.addStatusDetail(data);
+  addStatusDetail(
+    @Body() data: AddStatusDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.addStatusDetail(data, authUser);
   }
   @Get('/get-company-access-group/:id')
   getCompanyAccessGroup(
@@ -864,8 +871,9 @@ export class CompanyController {
   updateAccessGroup(
     @Param('id') id: string,
     @Body() data: UpdateAccessGroupDto,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.companyService.updateAccessGroup(id, data);
+    return this.companyService.updateAccessGroup(id, data, authUser);
   }
   @Delete('/delete-company/:id')
   deleteCompany(
@@ -875,8 +883,11 @@ export class CompanyController {
     return this.companyService.deleteCompany(id, authUser);
   }
   @Delete('/delete-access-group/:id')
-  deleteAccessgroup(@Param('id') id: string) {
-    return this.companyService.deleteAccessgroup(id);
+  deleteAccessgroup(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.companyService.deleteAccessgroup(id, authUser);
   }
   @Delete('/delete-company-gateway/:id')
   deleteCompanyGateway(

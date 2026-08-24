@@ -259,8 +259,9 @@ export class AuthController {
   updateUserAccessGroup(
     @Param('id') id: string,
     @Body() data: UpdateUserAccessDto,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.authService.updateUserAccessGroup(id, data);
+    return this.authService.updateUserAccessGroup(id, data, authUser);
   }
   @Patch('/update-company-user')
   @ApiBody({
@@ -311,12 +312,18 @@ export class AuthController {
       required: ['company_ifric_id', 'user_id'],
     },
   })
-  updateCompanyUser(@Body() data: UpdateUserDetails) {
-    return this.authService.updateCompanyUser(data);
+  updateCompanyUser(
+    @Body() data: UpdateUserDetails,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.authService.updateCompanyUser(data, authUser);
   }
   @Delete('/delete-company-user/:id')
-  deleteCompanyUser(@Param('id') id: string) {
-    return this.authService.deleteCompanyUser(id);
+  deleteCompanyUser(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.authService.deleteCompanyUser(id, authUser);
   }
 
   @Public()

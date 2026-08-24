@@ -150,8 +150,10 @@ explicitly generated id instead; don't reintroduce `repository.upsert()`.
 - **ScriptController/ScriptService** (`/script`) — flat, not its own module
   (registered directly in `AppModule`); one-time seed-data bootstrap for a
   fresh database (default RBAC access-group templates, company-category
-  taxonomy, example products). **Has no `@UseGuards()`** — don't leave it
-  reachable after initial setup in a real deployment.
+  taxonomy, example products). **Marked `@Public()`**, so the global
+  `AuthGuard` lets it through unauthenticated — the pre-existing behaviour,
+  preserved deliberately rather than endorsed. Don't leave it reachable
+  after initial setup in a real deployment.
 
 `AppModule` wires all of the above together plus a global in-memory
 `CacheModule`/`CacheInterceptor` (skips caching for
@@ -291,6 +293,26 @@ and relationship-scoped reads (notably `get-all-owner-companies`, which is
 a manufacturer's customer list) still use `assertCompanyMatch` and still
 403. `assertPermission` runs on **both** branches — widening *what* is
 readable did not widen *who* may read.
+
+Writes that touch the RBAC tables or a company's status are scoped the same
+way, with `assertCompanyMatch` (they are not company-detail reads, so there
+is no public branch): `add-status-detail`, `create/update/delete-access-group`,
+`update-user-access-group`, `update-company-user`, `delete-company-user`.
+`update-user-access-group` deliberately has **no self-exemption** — it
+assigns a user's role, so granting yourself one is the escalation being
+closed and `update` is required either way. `update-company-user` does
+split: editing your own profile (including the `old_password` branch) needs
+no `update` permission, or a `read_only` user could no longer change their
+own password; editing anyone else's does. It also re-checks that the target
+user actually belongs to the company named in the body, since
+`company_ifric_id` is caller-supplied and a matching claim alone does not
+prove that.
+
+Two limits worth knowing. `add-status-detail` is now confined to your own
+company, but a company marking *itself* verified is still a weak trust
+signal — a real fix needs an authority-side gate, which this service has no
+role for. And `POST /script`/`POST /script/create-product` remain `@Public()`
+with no guard at all, preserved as-is; see the ScriptController note above.
 
 `GET /auth/get-user-details-by-email-recover-password/:email` was deleted,
 not scoped. It was unauthenticated and returned a full `CompanyUser` row

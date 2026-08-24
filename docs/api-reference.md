@@ -74,9 +74,9 @@ README's Keycloak Authentication section).
 | GET | `/auth/get-user-details-by-email/:email` | Auth + RBAC-scoped | Look up a user by email — scoped to the company that user belongs to. |
 | GET | `/auth/check-company-admin/:email` | Auth | Whether an email belongs to a company's admin contact. |
 | PATCH | `/auth/update-password` | Public | Change password — verifies the old one against Keycloak first. |
-| PATCH | `/auth/update-user-access-group/:id` | Auth | Set a user's `AccessGroup` role (`{ user_role }`). |
-| PATCH | `/auth/update-company-user` | Auth | Update a user's name/email/image, optionally password. |
-| DELETE | `/auth/delete-company-user/:id` | Auth | Delete a user (Keycloak identity + local rows). |
+| PATCH | `/auth/update-user-access-group/:id` | Auth + RBAC-scoped | Set a user's `AccessGroup` role (`{ user_role }`). |
+| PATCH | `/auth/update-company-user` | Auth + RBAC-scoped | Update a user's name/email/image, optionally password. |
+| DELETE | `/auth/delete-company-user/:id` | Auth + RBAC-scoped | Delete a user (Keycloak identity + local rows). |
 | POST | `/auth/logout` | Public | Best-effort revoke the Keycloak session (pass `refresh_token`). |
 | POST | `/auth/refresh` | Public | Exchange a refresh token for a new access/refresh token pair. |
 | POST | `/auth/recover-password-request` | Public | Start password recovery — Keycloak emails the account holder a one-time reset link. Fixed acknowledgement, never a credential; throttled per address and per caller IP. Needs realm SMTP. |
@@ -135,9 +135,9 @@ instead check the caller against the named `company_ifric_id`.
 | Method | Path | Guard | Description |
 |---|---|---|---|
 | POST | `/company/devices` | Auth + RBAC-scoped | Create a gateway/server (`type` discriminator — `"asset"` moved to `POST /company/assets`). |
-| POST | `/company/create-access-group/:id` | Auth | Create a custom RBAC role for a company. |
+| POST | `/company/create-access-group/:id` | Auth + RBAC-scoped | Create a custom RBAC role for a company. |
 | POST | `/company/create-company` | `X-API-Key` (`COMPANY_CREATION_API_KEY`), not a Keycloak token | Create a company: mints `company_ifric_id` via ICID, provisions a default admin user + RBAC roles, all in one transaction. |
-| POST | `/company/add-status-detail` | Auth | Mark a company's verification status. |
+| POST | `/company/add-status-detail` | Auth + RBAC-scoped | Mark **your own** company's verification status. |
 | GET | `/company/get-company-access-group/:id` | Auth + RBAC-scoped | List a company's RBAC roles. |
 | GET | `/company/get-access-group-by-group-name/:company_id/:group_name` | Auth + RBAC-scoped | Look up one RBAC role by name. |
 | GET | `/company/get-access-group/:id` | Auth + RBAC-scoped | Look up one RBAC role by id — scoped to the company that owns it. |
@@ -157,9 +157,9 @@ instead check the caller against the named `company_ifric_id`.
 | GET | `/company/get-searched-manufacturer-companies/:searched_text` | Auth | Search manufacturer companies by name. |
 | GET | `/company/get-manufacturer-owner-companies` | Auth + public projection | Companies that are both a manufacturer and an owner somewhere. A directory listing, so always projected. |
 | PATCH | `/company/update-company/:id` | Auth + RBAC-scoped | Update company details. |
-| PATCH | `/company/update-access-group/:id` | Auth | Update an RBAC role's CRUD flags. |
+| PATCH | `/company/update-access-group/:id` | Auth + RBAC-scoped | Update an RBAC role's CRUD flags. |
 | DELETE | `/company/delete-company/:id` | Auth + RBAC-scoped | Delete a company (cascades its access groups, assets, etc). |
-| DELETE | `/company/delete-access-group/:id` | Auth | Delete an RBAC role. |
+| DELETE | `/company/delete-access-group/:id` | Auth + RBAC-scoped | Delete an RBAC role. |
 | DELETE | `/company/delete-company-gateway/:id` | Auth + RBAC-scoped | Delete a gateway. |
 | DELETE | `/company/delete-company-server/:id` | Auth + RBAC-scoped | Delete a server. |
 
