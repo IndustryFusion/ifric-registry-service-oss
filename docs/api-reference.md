@@ -13,14 +13,43 @@ hand-maintained — if it and the running app ever disagree, the app wins:
   npm run generate:openapi
   ```
 
-"Guard" below is `AuthGuard` (valid Keycloak bearer token required) unless
-noted otherwise. "RBAC-scoped" means the endpoint additionally checks the
-token's own `company_ifric_id`/`user_id` against the request (see the root
-README's [Keycloak Authentication](../README.md#keycloak-authentication)
-section and `AccessControlService`). Company/user CRUD, factory CRUD, and
-all of `/company/assets/*` are RBAC-scoped. Directory/search-style reads
-that intentionally span companies (`get-all-companies`, manufacturer
-search, category listings) are not.
+Authentication is **deny-by-default**: `AuthGuard` is registered globally
+(`APP_GUARD` in `app.module.ts`), so every endpoint requires a valid
+Keycloak bearer token unless it is explicitly marked `@Public()`. A handler
+with no decorators at all is guarded. `grep -rn "@Public()" src/` is the
+complete unauthenticated surface — the rows marked `Public` below.
+
+The "Guard" column then says what each endpoint does *beyond* authentication
+(see the root README's
+[Keycloak Authentication](../README.md#keycloak-authentication) section and
+`AccessControlService`):
+
+| Value | Meaning |
+| --- | --- |
+| `Auth` | Any valid token. No company check. |
+| `Auth + RBAC-scoped` | Also requires the token's own `company_ifric_id`/`user_id` to match the company being acted on — `403` otherwise. |
+| `Auth + public projection` | Readable across companies, but a caller asking about a company that is not their own gets the **public company profile** rather than the full record. Requires `read` permission either way. |
+| `Public` | `@Public()` — no token required. |
+| `X-API-Key ...` | `@Public()` plus its own key guard instead of a bearer token. |
+
+All writes, factory CRUD and all of `/company/assets/*` are RBAC-scoped.
+Directory/search-style reads that intentionally span companies
+(`get-all-companies`, manufacturer search, category listings) are not.
+
+### The public company profile
+
+Any authenticated user may resolve basic details of **any** company — a
+factory owner looking up the machine builder that made its equipment, for
+instance. Cross-company reads return exactly these fields and no others
+(see `PublicCompanyService`, which is the single source of truth):
+
+`company_ifric_id`, `company_name`, `address_1`, `zip`, `city`, `country`,
+`industry`, `company_image`, `company_category`
+
+Everything else on the company record — `_id`, `registration_number`,
+`admin_name`, `position`, `email`, `company_size`, `company_domain`,
+`company_verified`, `meta_data` — is returned only to the company itself.
+`temp_password` is never returned to anyone.
 
 ## Auth (`/auth/*`)
 
@@ -34,16 +63,15 @@ README's Keycloak Authentication section).
 | POST | `/auth/create-user/:admin_mail` | Auth + RBAC-scoped | Create an additional user for a company: provisions a Keycloak identity and grants it one `AccessGroup` role. |
 | POST | `/auth/login` | Public | Log in via Keycloak (ROPC), then resolve the user's company/category/AccessGroup role. Returns `access_token`/`refresh_token`. |
 | POST | `/auth/get-indexed-db-data` | Auth | Re-resolve a user's company/role/AccessGroup data without a fresh login. |
-| GET | `/auth/authenticate-token/:token` | Public | Verify a bearer token against Keycloak. |
-| GET | `/auth/get-company-users/:id` | Auth | List all users of a company. |
-| GET | `/auth/get-company-users-access/:company_ifric_id` | Auth | List a company's users with their one AccessGroup role each. |
+| POST | `/auth/authenticate-token` | Public | Verify a bearer token against Keycloak. The token goes in the body — a token in a URL path ends up in access and proxy logs. |
+| GET | `/auth/get-company-users/:id` | Auth + RBAC-scoped | List all users of a company. |
+| GET | `/auth/get-company-users-access/:company_ifric_id` | Auth + RBAC-scoped | List a company's users with their one AccessGroup role each. |
 | GET | `/auth/get-user-profile-content/:company_ifric_id/:user_id` | Auth | A user's role for their profile page. |
 | GET | `/auth/get-user-product-access/:id` | Auth | A user's `UserAccessGroup` grant, if any. |
-| GET | `/auth/get-user-details` | Auth | Look up a user by `user_email` + `company_ifric_id` (query params). |
+| GET | `/auth/get-user-details` | Auth + RBAC-scoped | Look up a user by `user_email` + `company_ifric_id` (query params). |
 | GET | `/auth/get-total-users` | Auth | Count of all users. |
-| GET | `/auth/get-user-details/:id` | Auth | Look up a user by its id. |
-| GET | `/auth/get-user-details-by-email/:email` | Auth | Look up a user by email. |
-| GET | `/auth/get-user-details-by-email-recover-password/:email` | Public | Same lookup, public — used by the forgot-password flow before login. |
+| GET | `/auth/get-user-details/:id` | Auth + RBAC-scoped | Look up a user by its id — scoped to the company that user belongs to. |
+| GET | `/auth/get-user-details-by-email/:email` | Auth + RBAC-scoped | Look up a user by email — scoped to the company that user belongs to. |
 | GET | `/auth/check-company-admin/:email` | Auth | Whether an email belongs to a company's admin contact. |
 | PATCH | `/auth/update-password` | Public | Change password — verifies the old one against Keycloak first. |
 | PATCH | `/auth/update-user-access-group/:id` | Auth | Set a user's `AccessGroup` role (`{ user_role }`). |
@@ -62,7 +90,7 @@ config, not a tenant resource), and gateway/server.
 
 | Method | Path | Guard | Description |
 |---|---|---|---|
-| GET | `/company/factories` | Auth (RBAC-scoped when `owner_company_ifric_id` is given) | List factories, optionally filtered by owner company. Unfiltered = cross-company directory. |
+| GET | `/company/factories` | Auth (RBAC-scoped when `owner_company_ifric_id` is given) | List factories, optionally filtered by owner company. Unfiltered = cross-company directory, projected to `factory_id`/`owner_company_ifric_id`/`location_name`/`city`/`country` — street address and coordinates are for the owner only. |
 | GET | `/company/factories/:id` | Auth + RBAC-scoped | Look up one factory by `factory_id`. |
 | GET | `/company/factories/:id/owner` | Auth + RBAC-scoped | Resolve a factory's owner company. |
 | GET | `/company/factories/:id/products` | Auth + RBAC-scoped | Asset URNs (see `/company/assets/*`) located at a factory. |
@@ -99,7 +127,7 @@ instead check the caller against the named `company_ifric_id`.
 | GET | `/company/assets/manufacturer/:company_ifric_id` | List assets manufactured by a company. |
 | GET | `/company/assets/owner/:company_ifric_id` | List assets owned by a company. |
 | GET | `/company/assets/manufacturer/:manufacturer_company_ifric_id/owner/:owner_company_ifric_id` | Assets shared between one specific manufacturer + owner pair. |
-| GET | `/company/assets/count` | Count assets matching a comma-separated list of URNs (`asset_ifric_ids` query param) — unscoped, may span companies. |
+| GET | `/company/assets/count` | Count assets matching a comma-separated list of URNs (`asset_ifric_ids` query param) — keyed on asset ids, so not company-scoped, but requires `read` permission. |
 | GET | `/company/assets/count/:company_ifric_id` | Count a company's assets. |
 
 ### Company CRUD, access groups, gateway/server
@@ -110,24 +138,24 @@ instead check the caller against the named `company_ifric_id`.
 | POST | `/company/create-access-group/:id` | Auth | Create a custom RBAC role for a company. |
 | POST | `/company/create-company` | `X-API-Key` (`COMPANY_CREATION_API_KEY`), not a Keycloak token | Create a company: mints `company_ifric_id` via ICID, provisions a default admin user + RBAC roles, all in one transaction. |
 | POST | `/company/add-status-detail` | Auth | Mark a company's verification status. |
-| GET | `/company/get-company-access-group/:id` | Auth | List a company's RBAC roles. |
-| GET | `/company/get-access-group-by-group-name/:company_id/:group_name` | Auth | Look up one RBAC role by name. |
-| GET | `/company/get-access-group/:id` | Auth | Look up one RBAC role by id. |
+| GET | `/company/get-company-access-group/:id` | Auth + RBAC-scoped | List a company's RBAC roles. |
+| GET | `/company/get-access-group-by-group-name/:company_id/:group_name` | Auth + RBAC-scoped | Look up one RBAC role by name. |
+| GET | `/company/get-access-group/:id` | Auth + RBAC-scoped | Look up one RBAC role by id — scoped to the company that owns it. |
 | GET | `/company/get-category-specific-company/:categoryName` | Auth | Companies in one category (e.g. `manufacturer`). |
-| GET | `/company/get-company-details/:id` | Auth + RBAC-scoped | Look up a company by `company_ifric_id`. |
-| GET | `/company/get-company-details-id/:id` | Auth + RBAC-scoped | Look up a company by its internal id. |
-| GET | `/company/get-company-contact-details/:company_ifric_id` | Auth + RBAC-scoped | A company's contact/admin details. |
+| GET | `/company/get-company-details/:id` | Auth + public projection | Look up a company by `company_ifric_id`. |
+| GET | `/company/get-company-details-id/:id` | Auth + public projection | Look up a company by its internal id. |
+| GET | `/company/get-company-contact-details/:company_ifric_id` | Auth + public projection | A company's contact/admin details. The admin name, position and email are own-company only. |
 | GET | `/company/companies/check` | Public | Check whether a company name/registration number is already taken. |
-| GET | `/company/get-company-details-by-email/:email` | Auth | Look up a company by its admin email. |
-| GET | `/company/get-company-details-by-name/:company_name` | Auth | Look up a company by name. |
-| GET | `/company/get-company-and-user-details/:company_ifric_id` | Auth + RBAC-scoped | Combined company + users + roles view. |
+| GET | `/company/get-company-details-by-email/:email` | Auth + public projection | Look up a company by its admin email. |
+| GET | `/company/get-company-details-by-name/:company_name` | Auth + public projection | Look up a company by name. |
+| GET | `/company/get-company-and-user-details/:company_ifric_id` | Auth + public projection | Combined company + users + roles view. The user roster is own-company only. |
 | GET | `/company/get-all-companies` | Auth | List every company (with certificate-verification annotation if enabled). |
 | GET | `/company/get-all-owner-companies/:company_ifric_id` | Auth + RBAC-scoped | Distinct owner companies across a manufacturer's assets. |
 | GET | `/company/get-company-category/:company_ifric_id` | Auth | A company's category (e.g. manufacturer, factory owner). |
 | GET | `/company/get-categories` | Auth | The fixed list of company categories. |
 | GET | `/company/get-manufacturer-companies/:count` | Auth | Paged list of manufacturer companies. |
 | GET | `/company/get-searched-manufacturer-companies/:searched_text` | Auth | Search manufacturer companies by name. |
-| GET | `/company/get-manufacturer-owner-companies` | Auth | Companies that are both a manufacturer and an owner somewhere. |
+| GET | `/company/get-manufacturer-owner-companies` | Auth + public projection | Companies that are both a manufacturer and an owner somewhere. A directory listing, so always projected. |
 | PATCH | `/company/update-company/:id` | Auth + RBAC-scoped | Update company details. |
 | PATCH | `/company/update-access-group/:id` | Auth | Update an RBAC role's CRUD flags. |
 | DELETE | `/company/delete-company/:id` | Auth + RBAC-scoped | Delete a company (cascades its access groups, assets, etc). |
@@ -155,11 +183,11 @@ they 404.
 
 | Method | Path | Guard | Description |
 |---|---|---|---|
-| POST | `/certificate/create-company-certificate` | Auth | Issue a Hedera-backed certificate for a company, via ICID. |
+| POST | `/certificate/create-company-certificate` | Auth + RBAC-scoped | Issue a Hedera-backed certificate for **your own** company, via ICID. |
 | POST | `/certificate/verify-company-certificate` | Auth | Verify a company's certificate, via ICID. |
-| GET | `/certificate/get-company-certificate/:company_ifric_id` | Auth | Fetch a company's stored certificate. |
-| GET | `/certificate/reveal-private-key/:company_ifric_id` | Auth | Decrypt and reveal the certificate's private key. |
-| DELETE | `/certificate/delete-private-key/:company_ifric_id` | Auth | Delete the stored private key. |
+| GET | `/certificate/get-company-certificate/:company_ifric_id` | Auth + RBAC-scoped | Fetch your own company's stored certificate. The rows include the encrypted private key. |
+| GET | `/certificate/reveal-private-key/:company_ifric_id` | Auth + RBAC-scoped | Decrypt and reveal **your own** company's certificate private key. |
+| DELETE | `/certificate/delete-private-key/:company_ifric_id` | Auth + RBAC-scoped | Delete your own company's stored private key. |
 
 ## Script (`/script*`)
 

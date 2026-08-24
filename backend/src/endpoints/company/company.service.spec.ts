@@ -36,6 +36,12 @@ import {
 import { CertificateService } from '../certificate/certificate.service';
 import { RegisterAuthDto } from '../auth/dto/register-auth.dto';
 import { AccessControlService } from 'src/common/access-control.service';
+import { PublicCompanyService } from 'src/common/public-company.service';
+
+// Stand-in for whatever PublicCompanyService returns — the exact field list
+// is that service's own contract (and its own spec); what matters here is
+// that a cross-company read yields this instead of the entity row.
+const PUBLIC_SHAPE = { company_name: 'public-shape' };
 
 const authorizedUser = {
   company_ifric_id: 'urn:ifric:owner-1',
@@ -95,7 +101,12 @@ describe('CompanyService', () => {
   let idCounter: number;
   let accessControlService: {
     assertCompanyMatch: jest.Mock;
+    isOwnCompany: jest.Mock;
     assertPermission: jest.Mock;
+  };
+  let publicCompanyService: {
+    toPublicCompany: jest.Mock;
+    toPublicCompanies: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -148,7 +159,15 @@ describe('CompanyService', () => {
     userAccessGroupRepository = { delete: jest.fn() };
     accessControlService = {
       assertCompanyMatch: jest.fn(),
+      // Default to "the caller owns it", so the pre-existing cases keep
+      // asserting the full-record behaviour they always did. Cases about
+      // cross-company reads override it.
+      isOwnCompany: jest.fn().mockReturnValue(true),
       assertPermission: jest.fn().mockResolvedValue(undefined),
+    };
+    publicCompanyService = {
+      toPublicCompany: jest.fn(async () => PUBLIC_SHAPE),
+      toPublicCompanies: jest.fn(async () => [PUBLIC_SHAPE]),
     };
 
     idCounter = 0;
@@ -213,6 +232,7 @@ describe('CompanyService', () => {
         { provide: CertificateService, useValue: certificateService },
         { provide: KeycloakService, useValue: keycloakService },
         { provide: AccessControlService, useValue: accessControlService },
+        { provide: PublicCompanyService, useValue: publicCompanyService },
         { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
@@ -342,27 +362,46 @@ describe('CompanyService', () => {
   });
 
   describe('getCompanyDetails', () => {
-    it('checks the caller against the requested company before querying', async () => {
-      companyRepository.find.mockResolvedValue([
-        { company_ifric_id: 'urn:ifric:company-1' },
-      ]);
+    const row = { company_ifric_id: 'urn:ifric:company-1' };
 
-      await service.getCompanyDetails('urn:ifric:company-1', authorizedUser);
+    it('returns the full record for the caller own company', async () => {
+      companyRepository.find.mockResolvedValue([row]);
+      accessControlService.isOwnCompany.mockReturnValue(true);
 
-      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
-        authorizedUser,
-        'urn:ifric:company-1',
-      );
+      await expect(
+        service.getCompanyDetails('urn:ifric:company-1', authorizedUser),
+      ).resolves.toEqual([row]);
+
       expect(accessControlService.assertPermission).toHaveBeenCalledWith(
         authorizedUser,
         'read',
       );
+      expect(publicCompanyService.toPublicCompanies).not.toHaveBeenCalled();
     });
 
-    it('rejects when the caller is scoped to a different company', async () => {
-      accessControlService.assertCompanyMatch.mockImplementation(() => {
-        throw new HttpException('Forbidden', 403);
-      });
+    // Used to be a flat 403, which is what stopped a factory owner
+    // resolving the machine builder that made their equipment.
+    it('returns the public projection for another company instead of rejecting', async () => {
+      companyRepository.find.mockResolvedValue([row]);
+      accessControlService.isOwnCompany.mockReturnValue(false);
+
+      await expect(
+        service.getCompanyDetails('urn:ifric:company-1', {
+          company_ifric_id: 'urn:ifric:other-company',
+          user_id: 'user-1',
+        }),
+      ).resolves.toEqual([PUBLIC_SHAPE]);
+      expect(publicCompanyService.toPublicCompanies).toHaveBeenCalledWith([
+        row,
+      ]);
+    });
+
+    // The public branch widens *what* is readable, not *who* may read —
+    // a caller with no read grant still gets nothing.
+    it('does not query when the caller holds no read permission', async () => {
+      accessControlService.assertPermission.mockRejectedValue(
+        new HttpException('No read permission', 403),
+      );
 
       await expect(
         service.getCompanyDetails('urn:ifric:company-1', {
@@ -381,24 +420,27 @@ describe('CompanyService', () => {
       await expect(
         service.getCompanyAndUserDetails('urn:ifric:missing', authorizedUser),
       ).resolves.toEqual([]);
-      expect(accessControlService.assertCompanyMatch).not.toHaveBeenCalled();
+      expect(accessControlService.assertPermission).not.toHaveBeenCalled();
     });
 
-    it('rejects when the caller is scoped to a different company', async () => {
-      companyRepository.findOne.mockResolvedValue({
+    // The user roster is the private half of this endpoint. A foreign
+    // caller gets the company profile with no company_users key at all —
+    // an empty array would read as "this company has no users".
+    it('omits the user roster entirely for another company', async () => {
+      const company = {
         _id: 'company-1',
         company_ifric_id: 'urn:ifric:company-1',
-      });
-      accessControlService.assertCompanyMatch.mockImplementation(() => {
-        throw new HttpException('Forbidden', 403);
-      });
+      };
+      companyRepository.findOne.mockResolvedValue(company);
+      accessControlService.isOwnCompany.mockReturnValue(false);
 
-      await expect(
-        service.getCompanyAndUserDetails('urn:ifric:company-1', {
-          company_ifric_id: 'urn:ifric:other-company',
-          user_id: 'user-1',
-        }),
-      ).rejects.toMatchObject({ status: 403 });
+      const result = await service.getCompanyAndUserDetails(
+        'urn:ifric:company-1',
+        { company_ifric_id: 'urn:ifric:other-company', user_id: 'user-1' },
+      );
+
+      expect(result).toEqual([PUBLIC_SHAPE]);
+      expect(result[0]).not.toHaveProperty('company_users');
       expect(companyCategoryMappingRepository.find).not.toHaveBeenCalled();
     });
   });
@@ -1013,6 +1055,139 @@ describe('CompanyService', () => {
       expect(companyRepository.delete).toHaveBeenCalledWith({
         _id: 'company-1',
       });
+    });
+  });
+  // These three used to return raw Company rows to any authenticated
+  // caller, with no company scoping of any kind.
+  describe('cross-company reads that used to over-share', () => {
+    const foreignRow = {
+      _id: 'company-1',
+      company_ifric_id: 'urn:ifric:company-1',
+      company_name: 'Machine Builder',
+      email: 'admin@builder.example',
+      registration_number: 'HRB-1',
+      temp_password: 'legacy-secret',
+    };
+
+    describe('getCompanyDetailsByEmail', () => {
+      it('projects another company rather than returning the row', async () => {
+        companyRepository.find.mockResolvedValue([foreignRow]);
+        accessControlService.isOwnCompany.mockReturnValue(false);
+
+        await expect(
+          service.getCompanyDetailsByEmail(
+            'admin@builder.example',
+            authorizedUser,
+          ),
+        ).resolves.toEqual([PUBLIC_SHAPE]);
+      });
+
+      it('returns the full record for the caller own company', async () => {
+        companyRepository.find.mockResolvedValue([foreignRow]);
+        accessControlService.isOwnCompany.mockReturnValue(true);
+
+        await expect(
+          service.getCompanyDetailsByEmail(
+            'admin@builder.example',
+            authorizedUser,
+          ),
+        ).resolves.toEqual([foreignRow]);
+      });
+    });
+
+    describe('getCompanyDetailsByName', () => {
+      // Company names are not unique, so this decides per row rather than
+      // off the first match.
+      it('returns the own row in full and projects the rest', async () => {
+        const ownRow = {
+          _id: 'company-2',
+          company_ifric_id: 'urn:ifric:owner-1',
+          company_name: 'Machine Builder',
+        };
+        companyRepository.find.mockResolvedValue([ownRow, foreignRow]);
+        accessControlService.isOwnCompany.mockImplementation(
+          (_claims: any, target: string) => target === 'urn:ifric:owner-1',
+        );
+
+        await expect(
+          service.getCompanyDetailsByName('Machine Builder', authorizedUser),
+        ).resolves.toEqual([ownRow, PUBLIC_SHAPE]);
+        expect(publicCompanyService.toPublicCompanies).toHaveBeenCalledWith([
+          foreignRow,
+        ]);
+      });
+    });
+
+    describe('getManufacturerAndOwnerCompanies', () => {
+      it('projects every row — a directory has no own-company branch', async () => {
+        companyCategoryRepository.find.mockResolvedValue([{ _id: 'cat-1' }]);
+        companyCategoryMappingRepository.find.mockResolvedValue([
+          { company_id: 'company-1', category_id: 'cat-1' },
+        ]);
+        companyRepository.find.mockResolvedValue([foreignRow]);
+
+        await expect(
+          service.getManufacturerAndOwnerCompanies(),
+        ).resolves.toEqual([PUBLIC_SHAPE]);
+      });
+    });
+  });
+
+  describe('getFactories', () => {
+    const factory = {
+      factory_id: 'urn:ifric:fac-1',
+      owner_company_ifric_id: 'urn:ifric:owner-1',
+      location_name: 'Plant 1',
+      address_1: 'Hauptstrasse 1',
+      zip: '80331',
+      city: 'Munich',
+      country: 'Germany',
+      latitude: 48.13,
+      longitude: 11.58,
+    };
+
+    it('returns full factory records for the owner filter', async () => {
+      factoryRepository.find.mockResolvedValue([factory]);
+
+      await expect(
+        service.getFactories('urn:ifric:owner-1', authorizedUser),
+      ).resolves.toEqual([factory]);
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        authorizedUser,
+        'urn:ifric:owner-1',
+      );
+    });
+
+    // Dropping the query parameter used to skip the check entirely and
+    // return every company's exact siting data.
+    it('projects the unfiltered directory, dropping address and coordinates', async () => {
+      factoryRepository.find.mockResolvedValue([factory]);
+
+      const result = await service.getFactories(undefined, authorizedUser);
+
+      expect(result).toEqual([
+        {
+          factory_id: 'urn:ifric:fac-1',
+          owner_company_ifric_id: 'urn:ifric:owner-1',
+          location_name: 'Plant 1',
+          city: 'Munich',
+          country: 'Germany',
+        },
+      ]);
+      expect(result[0]).not.toHaveProperty('latitude');
+      expect(result[0]).not.toHaveProperty('longitude');
+      expect(result[0]).not.toHaveProperty('address_1');
+    });
+
+    it('requires read permission on the unfiltered branch too', async () => {
+      accessControlService.assertPermission.mockRejectedValue(
+        new HttpException('No read permission', 403),
+      );
+
+      await expect(
+        service.getFactories(undefined, authorizedUser),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(factoryRepository.find).not.toHaveBeenCalled();
     });
   });
 });

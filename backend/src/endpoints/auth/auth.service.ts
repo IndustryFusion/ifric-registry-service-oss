@@ -269,6 +269,24 @@ export class AuthService {
     }
   }
 
+  // These lookups are keyed on a user id or email rather than a company, so
+  // the company boundary has to be recovered from the row before it can be
+  // asserted. Kept in one place so every user-facing read enforces it the
+  // same way.
+  private async assertCallerOwnsUsersCompany(
+    user: CompanyUser,
+    authUser: AuthTokenClaims,
+  ): Promise<void> {
+    const company = await this.companyRepository.findOne({
+      where: { _id: user.company_id },
+    });
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      company?.company_ifric_id ?? '',
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
+  }
+
   async getIndexedData(data: FindIndexedDbAuthDto) {
     try {
       // Fetch Data from Company User
@@ -365,7 +383,7 @@ export class AuthService {
     }
   }
 
-  async getCompanyUsers(id: string) {
+  async getCompanyUsers(id: string, authUser: AuthTokenClaims) {
     try {
       const response = await this.companyRepository.find({
         where: { company_ifric_id: id },
@@ -376,6 +394,8 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       return await this.companyUserRepository.find({
         where: { company_id: response[0]._id },
@@ -395,7 +415,10 @@ export class AuthService {
   // -> accessgroups). Assembled as plain queries + in-memory joins instead of
   // one SQL mega-join, to keep the output shape easy to verify field-by-field
   // against the original $project stage.
-  async getCompanyUsersAccess(company_ifric_id: string) {
+  async getCompanyUsersAccess(
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const response = await this.companyRepository.findOne({
         where: { company_ifric_id },
@@ -406,6 +429,8 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       const users = await this.companyUserRepository.find({
         where: { company_id: response._id },
@@ -464,7 +489,11 @@ export class AuthService {
 
   // One AccessGroup grant per user (no per-product dimension) — returns
   // that single role, or null if the user has none yet.
-  async getUserProfileContent(company_ifric_id: string, user_id: string) {
+  async getUserProfileContent(
+    company_ifric_id: string,
+    user_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const response = await this.companyRepository.findOne({
         where: { company_ifric_id },
@@ -475,6 +504,8 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       const row = await this.userAccessGroupRepository.findOne({
         where: { user_id },
@@ -519,7 +550,11 @@ export class AuthService {
     }
   }
 
-  async getUserDetails(user_email: string, company_ifric_id: string) {
+  async getUserDetails(
+    user_email: string,
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id: company_ifric_id },
@@ -530,6 +565,8 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       const response = await this.companyUserRepository.find({
         where: { user_email: user_email, company_id: companyData[0]._id },
@@ -546,7 +583,7 @@ export class AuthService {
     }
   }
 
-  async getUserDetailsById(id: string) {
+  async getUserDetailsById(id: string, authUser: AuthTokenClaims) {
     try {
       const companyUserData = await this.companyUserRepository.find({
         where: { _id: id },
@@ -557,6 +594,7 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      await this.assertCallerOwnsUsersCompany(companyUserData[0], authUser);
 
       return companyUserData;
     } catch (err) {
@@ -570,7 +608,7 @@ export class AuthService {
     }
   }
 
-  async getUserDetailsByEmail(email: string) {
+  async getUserDetailsByEmail(email: string, authUser: AuthTokenClaims) {
     try {
       const companyUserData = await this.companyUserRepository.find({
         where: { user_email: email },
@@ -581,6 +619,7 @@ export class AuthService {
           HttpStatus.NOT_FOUND,
         );
       }
+      await this.assertCallerOwnsUsersCompany(companyUserData[0], authUser);
       return companyUserData;
     } catch (err) {
       if (err instanceof HttpException) {

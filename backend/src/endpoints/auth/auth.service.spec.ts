@@ -17,7 +17,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { HttpException } from '@nestjs/common';
+import { ForbiddenException, HttpException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { KeycloakService } from './keycloak.service';
 import {
@@ -669,6 +669,108 @@ describe('AuthService', () => {
       expect(userAccessGroupRepository.query).toHaveBeenCalledWith(
         expect.stringContaining('ON CONFLICT'),
         [expect.any(String), 'user-1', 'ag-1'],
+      );
+    });
+  });
+  // The whole /auth/get-* surface used to take no caller identity at all:
+  // any valid realm token could read any company's user roster, including
+  // every user's email address.
+  describe('company scoping on user lookups', () => {
+    const caller = {
+      company_ifric_id: 'urn:ifric:company-1',
+      user_id: 'user-1',
+    };
+    const userRow = {
+      _id: 'user-9',
+      company_id: 'company-2',
+      user_email: 'someone@other.example',
+      user_name: 'Someone Else',
+    };
+
+    it('getCompanyUsers rejects a caller from another company', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-2' }]);
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new ForbiddenException('mismatch');
+      });
+
+      await expect(
+        service.getCompanyUsers('urn:ifric:other-company', caller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(companyUserRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('getCompanyUsers returns the roster for the caller own company', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-1' }]);
+      companyUserRepository.find.mockResolvedValue([userRow]);
+
+      await expect(
+        service.getCompanyUsers('urn:ifric:company-1', caller),
+      ).resolves.toEqual([userRow]);
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        caller,
+        'read',
+      );
+    });
+
+    it('getUserDetails rejects a caller from another company', async () => {
+      companyRepository.find.mockResolvedValue([{ _id: 'company-2' }]);
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new ForbiddenException('mismatch');
+      });
+
+      await expect(
+        service.getUserDetails(
+          'someone@other.example',
+          'urn:ifric:other-company',
+          caller,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(companyUserRepository.find).not.toHaveBeenCalled();
+    });
+
+    // Keyed on a user id/email rather than a company, so the boundary has
+    // to be recovered from the row before it can be asserted.
+    it('getUserDetailsById asserts against the company the user belongs to', async () => {
+      companyUserRepository.find.mockResolvedValue([userRow]);
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-2',
+        company_ifric_id: 'urn:ifric:other-company',
+      });
+
+      await service.getUserDetailsById('user-9', caller);
+
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        caller,
+        'urn:ifric:other-company',
+      );
+    });
+
+    it('getUserDetailsByEmail rejects a caller from another company', async () => {
+      companyUserRepository.find.mockResolvedValue([userRow]);
+      companyRepository.findOne.mockResolvedValue({
+        _id: 'company-2',
+        company_ifric_id: 'urn:ifric:other-company',
+      });
+      accessControlService.assertCompanyMatch.mockImplementation(() => {
+        throw new ForbiddenException('mismatch');
+      });
+
+      await expect(
+        service.getUserDetailsByEmail('someone@other.example', caller),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    // A user row whose company row has gone missing must not fall through
+    // the check — an empty id can never match a real claim.
+    it('denies when the user company cannot be resolved', async () => {
+      companyUserRepository.find.mockResolvedValue([userRow]);
+      companyRepository.findOne.mockResolvedValue(null);
+
+      await service.getUserDetailsById('user-9', caller).catch(() => undefined);
+
+      expect(accessControlService.assertCompanyMatch).toHaveBeenCalledWith(
+        caller,
+        '',
       );
     });
   });

@@ -20,8 +20,10 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { AccessControlService } from '../../common/access-control.service';
+import { IS_PUBLIC_KEY } from '../../common/public.decorator';
 import { KeycloakService } from './keycloak.service';
 
 /**
@@ -34,6 +36,11 @@ import { KeycloakService } from './keycloak.service';
  * sets — so the payload is normalized here, at the one point every guarded
  * request passes through, rather than at the ~30 places that consume it.
  * Everything downstream sees a single shape.
+ *
+ * Registered globally via APP_GUARD in app.module.ts, so it runs for every
+ * route unless that route carries @Public(). Authentication is therefore
+ * deny-by-default: a new handler is guarded whether or not its author
+ * thought about it.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -44,9 +51,20 @@ export class AuthGuard implements CanActivate {
   constructor(
     private keycloakService: KeycloakService,
     private accessControlService: AccessControlService,
+    private reflector: Reflector,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Checked before the header is even read: a @Public() route must work
+    // for a caller that has no token to send.
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) {
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest();
     const token = this.extractTokenFromHeader(request);
     if (!token) {

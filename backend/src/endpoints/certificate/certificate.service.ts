@@ -19,6 +19,8 @@ import axios from 'axios';
 import { In, MoreThan, Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Company, CompanyUser, Certificate } from 'src/entities';
+import { AccessControlService } from 'src/common/access-control.service';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { envConstants } from 'src/common/env.constants';
@@ -32,6 +34,7 @@ export class CertificateService {
     private companyUserRepository: Repository<CompanyUser>,
     @InjectRepository(Certificate)
     private certificateRepository: Repository<Certificate>,
+    private readonly accessControlService: AccessControlService,
   ) {}
   private readonly icidUrl = envConstants.icidServiceBackendUrl;
   private readonly ENCRYPTION_SECRET = envConstants.hederaKeySecret;
@@ -74,12 +77,19 @@ export class CertificateService {
     return decrypted.toString('utf8');
   }
 
+  // Every method here is company-id-in / data-out, so the id in the request
+  // is the only thing naming a company — AuthGuard alone just proves the
+  // caller holds some valid realm token. Each entry point that touches a
+  // company's certificate material asserts the caller owns it.
   async generateCompanyCertificate(
     company_ifric_id: string,
     expiry: Date,
     user_email: string,
+    authUser: AuthTokenClaims,
   ) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'create');
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id },
       });
@@ -135,8 +145,11 @@ export class CertificateService {
         message: 'Certificate created successfully',
       };
     } catch (err) {
-      if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
+      // Nest's own HttpExceptions (the 403s above, the 404s below) carry a
+      // `.response` too, but not the axios `{data:{message}}` shape this
+      // branch assumes — without this rethrow they'd surface as a 500.
+      if (err instanceof HttpException) {
+        throw err;
       } else if (err.response) {
         throw new HttpException(err.response.data.message, err.response.status);
       } else {
@@ -145,8 +158,13 @@ export class CertificateService {
     }
   }
 
-  async getCompanyCertificate(company_ifric_id: string) {
+  async getCompanyCertificate(
+    company_ifric_id: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id },
       });
@@ -163,8 +181,11 @@ export class CertificateService {
         order: { expiry_on: 'DESC', created_on: 'DESC' },
       });
     } catch (err) {
-      if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
+      // Nest's own HttpExceptions (the 403s above, the 404s below) carry a
+      // `.response` too, but not the axios `{data:{message}}` shape this
+      // branch assumes — without this rethrow they'd surface as a 500.
+      if (err instanceof HttpException) {
+        throw err;
       } else if (err.response) {
         throw new HttpException(err.response.data.message, err.response.status);
       } else {
@@ -173,8 +194,10 @@ export class CertificateService {
     }
   }
 
-  async revealPrivateKey(company_ifric_id: string) {
+  async revealPrivateKey(company_ifric_id: string, authUser: AuthTokenClaims) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'read');
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id },
       });
@@ -271,8 +294,11 @@ export class CertificateService {
         return { data: true };
       }
     } catch (err) {
-      if (err.response) {
-        throw new HttpException(err.response.data.message, err.response.status);
+      // Nest's own HttpExceptions (the 403s above, the 404s below) carry a
+      // `.response` too, but not the axios `{data:{message}}` shape this
+      // branch assumes — without this rethrow they'd surface as a 500.
+      if (err instanceof HttpException) {
+        throw err;
       } else if (err.response) {
         throw new HttpException(err.response.data.message, err.response.status);
       } else {
@@ -411,8 +437,10 @@ export class CertificateService {
     }
   }
 
-  async deletePrivateKey(company_ifric_id: string) {
+  async deletePrivateKey(company_ifric_id: string, authUser: AuthTokenClaims) {
     try {
+      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
+      await this.accessControlService.assertPermission(authUser, 'delete');
       const companyData = await this.companyRepository.find({
         where: { company_ifric_id },
       });

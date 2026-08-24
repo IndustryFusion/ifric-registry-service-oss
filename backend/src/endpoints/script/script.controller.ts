@@ -17,6 +17,7 @@
 import { Controller, Post } from '@nestjs/common';
 import { ScriptService } from './script.service';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Public } from 'src/common/public.decorator';
 
 /**
  * One-off setup scripts for seeding reference data into a fresh deployment.
@@ -36,6 +37,7 @@ export class ScriptController {
    * src/common/company-category.constants.ts). Run once against a fresh
    * database.
    */
+  @Public()
   @Post()
   @ApiOperation({
     summary: 'Seed default access groups and company categories',
@@ -51,6 +53,7 @@ export class ScriptController {
    * the contents of ScriptService.createProduct() with your own product
    * lineup before running this against a real deployment.
    */
+  @Public()
   @Post('create-product')
   @ApiOperation({
     summary: 'Seed example products',

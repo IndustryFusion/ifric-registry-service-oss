@@ -14,18 +14,11 @@
 // limitations under the License.
 //
 
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Param,
-  Delete,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete } from '@nestjs/common';
 import { CertificateService } from './certificate.service';
 import { CreateCompanyCertificateDto } from './dto/create-certificate.dto';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthUser } from '../auth/auth-user.decorator';
+import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
 
 @ApiTags('Certificate')
@@ -33,8 +26,6 @@ import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
 @Controller('certificate')
 export class CertificateController {
   constructor(private readonly certificateService: CertificateService) {}
-
-  @UseGuards(AuthGuard)
   @Post('create-company-certificate')
   @ApiBody({
     description: 'Details for creating a company certificate',
@@ -59,19 +50,21 @@ export class CertificateController {
       required: ['company_ifric_id', 'expiry', 'user_email'],
     },
   })
-  async generateCompanyCertificate(@Body() data: CreateCompanyCertificateDto) {
+  async generateCompanyCertificate(
+    @Body() data: CreateCompanyCertificateDto,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
     try {
       return await this.certificateService.generateCompanyCertificate(
         data.company_ifric_id,
         new Date(data.expiry),
         data.user_email,
+        authUser,
       );
     } catch (err) {
       throw err;
     }
   }
-
-  @UseGuards(AuthGuard)
   @Post('verify-company-certificate')
   @ApiBody({
     schema: {
@@ -103,36 +96,44 @@ export class CertificateController {
       throw err;
     }
   }
-
-  @UseGuards(AuthGuard)
   @Get('get-company-certificate/:company_ifric_id')
   async getCompanyCertificate(
     @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
     try {
       return await this.certificateService.getCompanyCertificate(
         company_ifric_id,
+        authUser,
       );
     } catch (err) {
       throw err;
     }
   }
-
-  @UseGuards(AuthGuard)
   @Get('reveal-private-key/:company_ifric_id')
-  async revealPrivateKey(@Param('company_ifric_id') company_ifric_id: string) {
+  async revealPrivateKey(
+    @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
     try {
-      return await this.certificateService.revealPrivateKey(company_ifric_id);
+      return await this.certificateService.revealPrivateKey(
+        company_ifric_id,
+        authUser,
+      );
     } catch (err) {
       throw err;
     }
   }
-
-  @UseGuards(AuthGuard)
   @Delete('delete-private-key/:company_ifric_id')
-  async deletePrivateKey(@Param('company_ifric_id') company_ifric_id: string) {
+  async deletePrivateKey(
+    @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
     try {
-      return await this.certificateService.deletePrivateKey(company_ifric_id);
+      return await this.certificateService.deletePrivateKey(
+        company_ifric_id,
+        authUser,
+      );
     } catch (err) {
       throw err;
     }

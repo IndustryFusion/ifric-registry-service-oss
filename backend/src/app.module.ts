@@ -25,11 +25,12 @@ import { ScriptService } from './endpoints/script/script.service';
 import { AuthModule } from './endpoints/auth/auth.module';
 import { CertificateModule } from './endpoints/certificate/certificate.module';
 import { CacheInterceptor, CacheModule } from '@nestjs/cache-manager';
-import { APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CompanyModule } from './endpoints/company/company.module';
 import { ProductModule } from './endpoints/product/product.module';
 import { AccessControlModule } from './common/access-control.module';
+import { AuthGuard } from './endpoints/auth/auth.guard';
 import { entities, AccessGroup, CompanyCategory, Product } from './entities';
 
 dotenv.config();
@@ -72,6 +73,17 @@ dotenv.config();
     {
       provide: APP_INTERCEPTOR,
       useClass: CacheInterceptor,
+    },
+    // Authentication is deny-by-default: every route is guarded unless it
+    // carries @Public(). Previously a route was protected only if its
+    // author remembered @UseGuards(AuthGuard), so forgetting it left the
+    // handler open and nothing failed — which is how a majority of /auth/*
+    // and a third of /company/* ended up unscoped. AuthGuard's own
+    // dependencies (KeycloakService, AccessControlService) come from
+    // @Global() modules, so it resolves here without importing AuthModule.
+    {
+      provide: APP_GUARD,
+      useClass: AuthGuard,
     },
   ],
 })

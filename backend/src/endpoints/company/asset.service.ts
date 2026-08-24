@@ -25,6 +25,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Asset, Company, Factory } from 'src/entities';
 import { CreateAssetDto, UpdateAssetDto } from './dto/asset.dto';
 import { AccessControlService } from 'src/common/access-control.service';
+import { PublicCompanyService } from 'src/common/public-company.service';
 import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 
 // Owns the merged Asset concept — a row starts physical-only (company_id
@@ -39,6 +40,7 @@ export class AssetService {
     @InjectRepository(Company) private companyRepository: Repository<Company>,
     @InjectRepository(Factory) private factoryRepository: Repository<Factory>,
     private readonly accessControlService: AccessControlService,
+    private readonly publicCompanyService: PublicCompanyService,
   ) {}
 
   // Both the manufacturer (company_id) and the owner (owner_company_id, if
@@ -66,6 +68,21 @@ export class AssetService {
         "Caller's company is not a party to this asset",
       );
     }
+  }
+
+  // The counterparty lookups below are reachable by both parties to an
+  // asset, so "the company this endpoint names" is routinely not the
+  // caller's. Full row for your own company, public profile for the other.
+  private async projectUnlessOwn(
+    company: Company,
+    authUser: AuthTokenClaims,
+  ): Promise<Record<string, any>> {
+    if (
+      this.accessControlService.isOwnCompany(authUser, company.company_ifric_id)
+    ) {
+      return company;
+    }
+    return await this.publicCompanyService.toPublicCompany(company);
   }
 
   async createAsset(data: CreateAssetDto, authUser: AuthTokenClaims) {
@@ -355,7 +372,13 @@ export class AssetService {
     const company = await this.companyRepository.findOne({
       where: { _id: asset.company_id },
     });
-    return company ?? { company: null, message: 'No manufacturer found' };
+    if (!company) {
+      return { company: null, message: 'No manufacturer found' };
+    }
+    // assertCallerIsPartyTo admits *either* party, so for an owner asking
+    // who built their machine this is a foreign company — it used to hand
+    // back the counterparty's whole row.
+    return this.projectUnlessOwn(company, authUser);
   }
 
   async getAssetOwner(
@@ -377,7 +400,10 @@ export class AssetService {
     const owner = await this.companyRepository.findOne({
       where: { _id: asset.owner_company_id },
     });
-    return owner ?? { owner: null, message: 'No owner found' };
+    if (!owner) {
+      return { owner: null, message: 'No owner found' };
+    }
+    return this.projectUnlessOwn(owner, authUser);
   }
 
   async getAssetFactoryLocation(
@@ -486,7 +512,11 @@ export class AssetService {
     });
   }
 
-  async getAssetCount(assetIds: string[]) {
+  // Keyed on asset ids rather than a company, so there is no company match
+  // to make — but it ran with no permission check at all, which made it the
+  // one asset endpoint a token with no RBAC grant could still use.
+  async getAssetCount(assetIds: string[], authUser: AuthTokenClaims) {
+    await this.accessControlService.assertPermission(authUser, 'read');
     return this.assetRepository.count({
       where: { asset_ifric_id: In(assetIds) },
     });

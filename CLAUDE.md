@@ -191,6 +191,21 @@ themselves; every credential operation goes through `KeycloakService`
   `request.user` — see the dataspace note below. Signature and realm
   issuer are the only things checked; `azp`/`aud` deliberately are not, so
   any client in the realm authenticates here.
+
+  **Registered globally** via `APP_GUARD` in `app.module.ts`, so
+  authentication is deny-by-default: a handler with no decorators at all is
+  guarded, and `@Public()` (`src/common/public.decorator.ts`) is the only
+  way out — which makes `grep -rn "@Public()" src/` the complete
+  unauthenticated surface. Don't reintroduce per-route
+  `@UseGuards(AuthGuard)`; it's redundant now, and a controller carrying
+  `@UseGuards` should mean "something *extra* applies here" (today only
+  `CompanyCreationApiKeyGuard`). The previous opt-in arrangement is what
+  left a majority of `/auth/*` and about a third of `/company/*` with no
+  company scoping at all — including a route that decrypted any company's
+  Hedera private key for any valid token, and one that returned a user's
+  full record to an unauthenticated caller. Adding a route now fails
+  closed; deleting a `@Public()` breaks login, which is the direction you
+  want the mistakes to run in.
 - **Dataspace (`dataspace-ifric-reader` client) tokens** — a third client
   in the same realm, belonging to the dataspace data-sharing management
   app, issues tokens carrying `participant_id` instead of
@@ -200,7 +215,8 @@ themselves; every credential operation goes through `KeycloakService`
   `Company` and aliases it into the `company_ifric_id` slot — there is no
   mapping table and no column, and adding one would mean the copy
   invariant broke. Normalization happens **once, in `AuthGuard`**: nothing
-  downstream (the ~30 `assertCompanyMatch`/`assertPermission` call sites,
+  downstream (the `assertCompanyMatch`/`isOwnCompany`/`assertPermission`
+  call sites,
   `@AuthUser()`, any controller) knows two token formats exist, and a
   change that teaches a call site about `participant_id` means that
   boundary has been breached. `assertPermission` is skipped for a resolved
@@ -250,6 +266,40 @@ themselves; every credential operation goes through `KeycloakService`
   OSS build" or "the caller can relay it". `POST /auth/recover-password`
   survives from that flow but is now only a password change that verifies
   the current password first.
+
+### Company data exposure
+
+There is one definition of what a company shows to anyone outside it:
+`PublicCompanyService` (`src/common/public-company.service.ts`), an
+**allow-list** of `company_ifric_id`, `company_name`, `address_1`, `zip`,
+`city`, `country`, `industry`, `company_image` and the derived
+`company_category`. A column added to `Company` later is private until
+someone adds it here on purpose. Everything else — `_id`,
+`registration_number`, `admin_name`, `position`, `email`, `company_size`,
+`company_domain`, `company_verified`, `meta_data` — is own-company only,
+and the legacy `temp_password` column is returned to nobody.
+
+Company-*detail* reads (`get-company-details`, `-id`, `-by-email`,
+`-by-name`, `get-company-contact-details`, `get-company-and-user-details`,
+`get-manufacturer-owner-companies`, and the asset counterparty lookups)
+therefore branch on `AccessControlService.isOwnCompany` — full record for
+your own company, public profile for anyone else's — rather than throwing.
+Don't re-add a `assertCompanyMatch` to those: the flat 403 is what stopped
+a factory owner resolving the machine builder that made its equipment,
+while the same fields were already public via `get-all-companies`. Writes
+and relationship-scoped reads (notably `get-all-owner-companies`, which is
+a manufacturer's customer list) still use `assertCompanyMatch` and still
+403. `assertPermission` runs on **both** branches — widening *what* is
+readable did not widen *who* may read.
+
+`GET /auth/get-user-details-by-email-recover-password/:email` was deleted,
+not scoped. It was unauthenticated and returned a full `CompanyUser` row
+for any email, 404 vs 200 — reinstating exactly the account-enumeration
+oracle `recover-password-request` above is written to avoid. Don't bring it
+back in any form; the Keycloak-mailed action link needs nothing from it.
+`authenticate-token` is a `POST` with the token in the body for the same
+class of reason — a bearer token in a URL path lands in access and proxy
+logs.
 
 `CompanyUser.user_password`/`jwt_token` and `Company.password` were dropped
 (migration `DropLocalAuthColumns1784546767848`) — don't reintroduce them;

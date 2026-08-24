@@ -20,6 +20,7 @@ import { ForbiddenException, HttpException } from '@nestjs/common';
 import { AssetService } from './asset.service';
 import { Asset, Company, Factory } from 'src/entities';
 import { AccessControlService } from 'src/common/access-control.service';
+import { PublicCompanyService } from 'src/common/public-company.service';
 
 const manufacturer = {
   company_ifric_id: 'urn:ifric:manufacturer-1',
@@ -41,7 +42,12 @@ describe('AssetService', () => {
   let factoryRepository: { find: jest.Mock; findOne: jest.Mock };
   let accessControlService: {
     assertCompanyMatch: jest.Mock;
+    isOwnCompany: jest.Mock;
     assertPermission: jest.Mock;
+  };
+  let publicCompanyService: {
+    toPublicCompany: jest.Mock;
+    toPublicCompanies: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -58,7 +64,16 @@ describe('AssetService', () => {
     factoryRepository = { find: jest.fn(), findOne: jest.fn() };
     accessControlService = {
       assertCompanyMatch: jest.fn(),
+      // Default to "the caller owns it", so the pre-existing cases keep
+      // asserting the full-row behaviour they always did.
+      isOwnCompany: jest.fn().mockReturnValue(true),
       assertPermission: jest.fn().mockResolvedValue(undefined),
+    };
+    publicCompanyService = {
+      toPublicCompany: jest.fn(async () => ({ company_name: 'public-shape' })),
+      toPublicCompanies: jest.fn(async () => [
+        { company_name: 'public-shape' },
+      ]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -68,6 +83,7 @@ describe('AssetService', () => {
         { provide: getRepositoryToken(Company), useValue: companyRepository },
         { provide: getRepositoryToken(Factory), useValue: factoryRepository },
         { provide: AccessControlService, useValue: accessControlService },
+        { provide: PublicCompanyService, useValue: publicCompanyService },
       ],
     }).compile();
 
@@ -385,6 +401,116 @@ describe('AssetService', () => {
           user_id: 'user-3',
         }),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+  // assertCallerIsPartyTo admits either party to an asset, so these two
+  // endpoints routinely name a company that is not the caller's — and used
+  // to return that counterparty's entire Company row.
+  describe('counterparty company lookups', () => {
+    const asset = {
+      asset_ifric_id: 'urn:asset:1',
+      company_id: 'mfg-1',
+      owner_company_id: 'owner-1',
+    };
+    const manufacturer = {
+      _id: 'mfg-1',
+      company_ifric_id: 'urn:ifric:manufacturer-1',
+      company_name: 'Machine Builder',
+      email: 'admin@builder.example',
+      registration_number: 'HRB-1',
+    };
+
+    const owner = {
+      _id: 'owner-1',
+      company_ifric_id: 'urn:ifric:owner-1',
+      company_name: 'Factory Owner',
+      email: 'admin@owner.example',
+    };
+
+    beforeEach(() => {
+      assetRepository.findOne.mockResolvedValue(asset);
+      // assertCallerIsPartyTo resolves both sides, so the mock has to be
+      // id-aware or every caller looks like the manufacturer.
+      companyRepository.findOne.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          where._id === 'mfg-1'
+            ? manufacturer
+            : where._id === 'owner-1'
+              ? owner
+              : null,
+        ),
+      );
+    });
+
+    it('returns the full record when the manufacturer asks about itself', async () => {
+      accessControlService.isOwnCompany.mockReturnValue(true);
+
+      await expect(
+        service.getAssetManufacturer('urn:asset:1', {
+          company_ifric_id: 'urn:ifric:manufacturer-1',
+          user_id: 'user-1',
+        }),
+      ).resolves.toBe(manufacturer);
+      expect(publicCompanyService.toPublicCompany).not.toHaveBeenCalled();
+    });
+
+    it('projects the manufacturer to the public profile for the owner', async () => {
+      accessControlService.isOwnCompany.mockReturnValue(false);
+
+      const result = await service.getAssetManufacturer('urn:asset:1', {
+        company_ifric_id: 'urn:ifric:owner-1',
+        user_id: 'user-2',
+      });
+
+      expect(publicCompanyService.toPublicCompany).toHaveBeenCalledWith(
+        manufacturer,
+      );
+      expect(result).not.toHaveProperty('email');
+      expect(result).not.toHaveProperty('registration_number');
+    });
+
+    it('projects the owner to the public profile for the manufacturer', async () => {
+      accessControlService.isOwnCompany.mockReturnValue(false);
+
+      const result = await service.getAssetOwner('urn:asset:1', {
+        company_ifric_id: 'urn:ifric:manufacturer-1',
+        user_id: 'user-1',
+      });
+
+      expect(publicCompanyService.toPublicCompany).toHaveBeenCalled();
+      expect(result).not.toHaveProperty('email');
+    });
+  });
+
+  describe('getAssetCount', () => {
+    // Keyed on asset ids, so there is no company to match — but it ran with
+    // no permission check at all.
+    it('requires read permission before counting', async () => {
+      assetRepository.count.mockResolvedValue(2);
+
+      await service.getAssetCount(['urn:asset:1'], {
+        company_ifric_id: 'urn:ifric:company-1',
+        user_id: 'user-1',
+      });
+
+      expect(accessControlService.assertPermission).toHaveBeenCalledWith(
+        { company_ifric_id: 'urn:ifric:company-1', user_id: 'user-1' },
+        'read',
+      );
+    });
+
+    it('does not count when the caller holds no read permission', async () => {
+      accessControlService.assertPermission.mockRejectedValue(
+        new ForbiddenException('No read permission'),
+      );
+
+      await expect(
+        service.getAssetCount(['urn:asset:1'], {
+          company_ifric_id: 'urn:ifric:company-1',
+          user_id: 'user-1',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(assetRepository.count).not.toHaveBeenCalled();
     });
   });
 });

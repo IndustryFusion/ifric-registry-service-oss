@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -22,7 +22,6 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { ProductService } from './product.service';
-import { AuthGuard } from '../auth/auth.guard';
 
 // Everything asset/digital-twin-related moved to CompanyController's
 // /company/assets/* (see AssetService) — this controller is left with just
@@ -33,16 +32,12 @@ import { AuthGuard } from '../auth/auth.guard';
 @Controller('product')
 export class ProductController {
   constructor(private readonly productService: ProductService) {}
-
-  @UseGuards(AuthGuard)
   @Get(':id/name')
   @ApiOperation({ summary: "Look up a catalog Product's name by id" })
   @ApiParam({ name: 'id', description: 'Product catalog id' })
   getProductName(@Param('id') id: string) {
     return this.productService.getProductName(id);
   }
-
-  @UseGuards(AuthGuard)
   @Get('by-name/:product_name/id')
   @ApiOperation({ summary: 'Reverse lookup: catalog Product id by name' })
   @ApiParam({ name: 'product_name', description: 'Product catalog name' })

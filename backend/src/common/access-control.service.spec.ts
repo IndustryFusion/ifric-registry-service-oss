@@ -34,6 +34,37 @@ describe('AccessControlService', () => {
     );
   });
 
+  describe('isOwnCompany', () => {
+    it('is true when the claim matches the target company', () => {
+      expect(
+        service.isOwnCompany(
+          { company_ifric_id: 'urn:ifric:company-a' },
+          'urn:ifric:company-a',
+        ),
+      ).toBe(true);
+    });
+
+    it('is false for a different company', () => {
+      expect(
+        service.isOwnCompany(
+          { company_ifric_id: 'urn:ifric:company-a' },
+          'urn:ifric:company-b',
+        ),
+      ).toBe(false);
+    });
+
+    // Call sites use this to decide between the full record and the public
+    // projection. A token missing the claim must land on the projection, not
+    // slip through as "own" — otherwise omitting a claim would be an upgrade.
+    it('is false when the token has no company_ifric_id claim at all', () => {
+      expect(service.isOwnCompany({}, 'urn:ifric:company-a')).toBe(false);
+    });
+
+    it('is false when the target company id is empty', () => {
+      expect(service.isOwnCompany({ company_ifric_id: '' }, '')).toBe(false);
+    });
+  });
+
   describe('assertCompanyMatch', () => {
     it('passes when the claim matches the target company', () => {
       expect(() =>

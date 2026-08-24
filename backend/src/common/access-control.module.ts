@@ -16,17 +16,35 @@
 
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AccessGroup, Company, UserAccessGroup } from 'src/entities';
+import {
+  AccessGroup,
+  Company,
+  CompanyCategory,
+  CompanyCategoryMapping,
+  UserAccessGroup,
+} from 'src/entities';
 import { AccessControlService } from './access-control.service';
+import { PublicCompanyService } from './public-company.service';
 
 // @Global() so AccessControlService resolves for every module without each
 // one re-importing it — same rationale as KeycloakModule, since company/
 // RBAC scoping is a cross-cutting concern needed by CompanyModule,
-// ProductModule, and AuthModule alike.
+// ProductModule, and AuthModule alike. PublicCompanyService rides along for
+// the same reason: what a company exposes across the company boundary has
+// to be one answer, and CompanyService, AssetService and AuthService all
+// need it.
 @Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([AccessGroup, UserAccessGroup, Company])],
-  providers: [AccessControlService],
-  exports: [AccessControlService],
+  imports: [
+    TypeOrmModule.forFeature([
+      AccessGroup,
+      UserAccessGroup,
+      Company,
+      CompanyCategory,
+      CompanyCategoryMapping,
+    ]),
+  ],
+  providers: [AccessControlService, PublicCompanyService],
+  exports: [AccessControlService, PublicCompanyService],
 })
 export class AccessControlModule {}

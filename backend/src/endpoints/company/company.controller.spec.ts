@@ -35,6 +35,7 @@ import {
 } from 'src/entities';
 import { CertificateService } from '../certificate/certificate.service';
 import { AccessControlService } from 'src/common/access-control.service';
+import { PublicCompanyService } from 'src/common/public-company.service';
 
 describe('CompanyController', () => {
   let controller: CompanyController;
@@ -59,6 +60,7 @@ describe('CompanyController', () => {
         { provide: CertificateService, useValue: {} },
         { provide: KeycloakService, useValue: {} },
         { provide: AccessControlService, useValue: {} },
+        { provide: PublicCompanyService, useValue: {} },
         { provide: getDataSourceToken(), useValue: {} },
       ],
     }).compile();

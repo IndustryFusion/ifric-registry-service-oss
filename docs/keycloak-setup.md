@@ -173,12 +173,22 @@ Two consequences worth knowing:
   create/read/update/delete **within its own company**, regardless of any
   role its people hold on the IFRIC side. The tenant boundary still holds:
   the alias means `assertCompanyMatch` confines it to that one company.
-- **The exception is the handful of `AssetService` methods keyed by asset
-  id rather than company id** (`deleteAssets`, `getAssetByAssetIfricId`,
-  `getAssetManufacturer`, `getAssetOwner`, `getAssetFactoryLocation`,
-  `getManufacturerOwnerAssets`). These call `assertPermission` as their
-  only guard, so with the role check skipped there is nothing scoping them
-  for a participant token.
+- **The `AssetService` methods keyed by asset id rather than company id
+  scope themselves against the asset instead.** `getAssetByAssetIfricId`,
+  `getAssetManufacturer`, `getAssetOwner` and `getAssetFactoryLocation` go
+  through `assertCallerIsPartyTo` (the caller must be the manufacturer or
+  the owner); `deleteAssets` and `getManufacturerOwnerAssets` make the
+  equivalent comparison inline. All of these read
+  `authUser.company_ifric_id`, which `resolveClaims` populates for a
+  participant token too, so they stay confined to that company even with
+  the role check skipped. Because either party passes, the two that return
+  a *counterparty's* company record (`getAssetManufacturer`,
+  `getAssetOwner`) return the public profile rather than the full row
+  whenever the company named is not the caller's.
+- **`getAssetCount` is the one method with no company dimension at all** —
+  it counts a caller-supplied list of asset URNs, so there is nothing to
+  match against. It requires `read` permission, which is the only thing
+  standing in front of it.
 - **Whoever assigns `participant_id` can name a company here.** This is
   safe only while ids issued to non-IFRIC participants can never equal a
   real `company_ifric_id` — i.e. they come from a different namespace than
@@ -214,23 +224,31 @@ flowchart TB
         LI --> ROPC --> PM --> TOK
     end
 
-    subgraph R["3 · Every guarded request"]
+    subgraph R["3 · Every request"]
         direction TB
         REQ["Incoming request<br/>Authorization: Bearer &lt;token&gt;"]
-        AG1["AuthGuard<br/>verifies signature via JWKS"]
+        PUB{"@Public() on the handler?"}
+        AG1["AuthGuard (global, APP_GUARD)<br/>verifies signature via JWKS"]
         NRM["AccessControlService.resolveClaims<br/>ifric claims → passed through<br/>participant_id → matched against Company,<br/>aliased into company_ifric_id"]
         DEC["@AuthUser() decorator<br/>hands claims to the controller"]
-        ACM["AccessControlService.assertCompanyMatch<br/>(claims.company_ifric_id === target company?)"]
         APM["AccessControlService.assertPermission<br/>(claims.user_id's UserAccessGroup →<br/>AccessGroup flag for this action?)"]
-        ALLOW["Handler runs"]
+        OWN{"AccessControlService.isOwnCompany<br/>(claims.company_ifric_id === target company?)"}
+        ALLOW["Handler runs — full record"]
+        PROJ["Public company profile<br/>(PublicCompanyService)"]
         DENY["403 Forbidden"]
+        NOAUTH["401 Unauthorized"]
 
-        REQ --> AG1 --> NRM --> DEC --> ACM
-        ACM -- match --> APM
-        ACM -- mismatch --> DENY
-        APM -- flag true --> ALLOW
+        REQ --> PUB
+        PUB -- yes --> ALLOW
+        PUB -- no --> AG1
+        AG1 -- no/invalid token --> NOAUTH
+        AG1 --> NRM --> DEC --> APM
         APM -- flag false/missing --> DENY
-        APM -. participant: no user to check,<br/>role check skipped .-> ALLOW
+        APM -. participant: no user to check,<br/>role check skipped .-> OWN
+        APM -- flag true --> OWN
+        OWN -- own company --> ALLOW
+        OWN -- another company:<br/>write / scoped read --> DENY
+        OWN -- another company:<br/>company-detail read --> PROJ
     end
 
     KC1 -. attributes stored on .-> ROPC
@@ -239,6 +257,24 @@ flowchart TB
 ```
 
 A few things worth noting from this picture:
+
+- **Authentication is deny-by-default.** `AuthGuard` is registered globally
+  (`APP_GUARD` in `app.module.ts`), so a handler with no decorators at all
+  is guarded; `@Public()` is the only way out, and
+  `grep -rn "@Public()" src/` is therefore the complete unauthenticated
+  surface. Before this, a route was protected only if its author remembered
+  `@UseGuards(AuthGuard)` — forgetting it left the handler open and nothing
+  failed, which is how a majority of `/auth/*` and roughly a third of
+  `/company/*` ended up unscoped.
+- **The company boundary has two outcomes, not one.** Writes and
+  relationship-scoped reads still 403 across companies
+  (`assertCompanyMatch`). Company-*detail* reads instead degrade to the
+  public profile (`isOwnCompany` + `PublicCompanyService`), so any
+  participant can resolve a counterparty's name, address, industry and
+  category — a factory owner looking up the machine builder that made its
+  equipment — without ever seeing that company's contact details,
+  registration number or internal metadata. `assertPermission` still runs
+  on both paths: widening *what* is readable did not widen *who* may read.
 
 - **Two completely separate systems hold the pieces**: Keycloak owns
   *identity* (who is this, is the signature valid) and never sees

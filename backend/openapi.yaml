@@ -135,17 +135,23 @@ paths:
         - access-token: []
       tags:
         - Auth
-  /auth/authenticate-token/{token}:
-    get:
+  /auth/authenticate-token:
+    post:
       operationId: AuthController_authenticateToken
-      parameters:
-        - name: token
-          required: true
-          in: path
-          schema:
-            type: string
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+              required:
+                - token
       responses:
-        '200':
+        '201':
           description: ''
       security:
         - access-token: []
@@ -271,22 +277,6 @@ paths:
   /auth/get-user-details-by-email/{email}:
     get:
       operationId: AuthController_getUserDetailsByEmail
-      parameters:
-        - name: email
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Auth
-  /auth/get-user-details-by-email-recover-password/{email}:
-    get:
-      operationId: AuthController_getUserDetailsForRecoverPassword
       parameters:
         - name: email
           required: true
@@ -1674,116 +1664,6 @@ paths:
         - access-token: []
       tags:
         - Company
-  /certificate/create-company-certificate:
-    post:
-      operationId: CertificateController_generateCompanyCertificate
-      parameters: []
-      requestBody:
-        required: true
-        description: Details for creating a company certificate
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                company_ifric_id:
-                  type: string
-                  example: IFRIC12345
-                expiry:
-                  type: string
-                  format: date
-                  example: '2024-12-31'
-                user_email:
-                  type: string
-                  example: user@example.com
-              required:
-                - company_ifric_id
-                - expiry
-                - user_email
-      responses:
-        '201':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Certificate
-  /certificate/verify-company-certificate:
-    post:
-      operationId: CertificateController_verifyCompanyCertificate
-      parameters: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                company_ifric_id:
-                  type: string
-                  description: Unique identifier for the company
-                  example: IFRIC12345
-                certificate_data:
-                  type: string
-                  description: Certificate data to be verified
-                  example: base64encodedcertificatestring
-              required:
-                - company_ifric_id
-                - certificate_data
-      responses:
-        '201':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Certificate
-  /certificate/get-company-certificate/{company_ifric_id}:
-    get:
-      operationId: CertificateController_getCompanyCertificate
-      parameters:
-        - name: company_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Certificate
-  /certificate/reveal-private-key/{company_ifric_id}:
-    get:
-      operationId: CertificateController_revealPrivateKey
-      parameters:
-        - name: company_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Certificate
-  /certificate/delete-private-key/{company_ifric_id}:
-    delete:
-      operationId: CertificateController_deletePrivateKey
-      parameters:
-        - name: company_ifric_id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        '200':
-          description: ''
-      security:
-        - access-token: []
-      tags:
-        - Certificate
   /product/{id}/name:
     get:
       operationId: ProductController_getProductName

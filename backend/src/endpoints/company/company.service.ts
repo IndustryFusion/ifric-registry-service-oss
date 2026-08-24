@@ -46,6 +46,7 @@ import { UpdateFactoryDto } from './dto/update-factory.dto';
 import { envConstants } from 'src/common/env.constants';
 import { generateId } from 'src/database/generate-id';
 import { AccessControlService } from 'src/common/access-control.service';
+import { PublicCompanyService } from 'src/common/public-company.service';
 import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
 
 @Injectable()
@@ -73,6 +74,7 @@ export class CompanyService {
     private readonly certificateService: CertificateService,
     private keycloakService: KeycloakService,
     private readonly accessControlService: AccessControlService,
+    private readonly publicCompanyService: PublicCompanyService,
     @InjectDataSource() private readonly dataSource: DataSource,
   ) {}
 
@@ -88,24 +90,34 @@ export class CompanyService {
   // src/endpoints/product/product.service.ts.
   // ===========================================================================
 
-  // Unscoped only when called with no filter (list-all-factories is a
-  // deliberate cross-company directory, same as getAllCompanies) —
-  // scoped whenever a specific owner company is named.
+  // The unfiltered form is a deliberate cross-company directory (same as
+  // getAllCompanies), but it used to be the way *around* the owner check
+  // rather than a narrower view: dropping the query parameter returned
+  // every company's factories with full street address and coordinates.
+  // Both branches now require read permission, and the directory branch is
+  // projected — precise siting data is for the owner only.
   async getFactories(
     ownerCompanyIfricId: string | undefined,
     authUser: AuthTokenClaims,
   ): Promise<Record<string, any>[]> {
+    await this.accessControlService.assertPermission(authUser, 'read');
     if (ownerCompanyIfricId) {
       this.accessControlService.assertCompanyMatch(
         authUser,
         ownerCompanyIfricId,
       );
-      await this.accessControlService.assertPermission(authUser, 'read');
+      return this.factoryRepository.find({
+        where: { owner_company_ifric_id: ownerCompanyIfricId },
+      });
     }
-    const where = ownerCompanyIfricId
-      ? { owner_company_ifric_id: ownerCompanyIfricId }
-      : {};
-    return this.factoryRepository.find({ where });
+    const factories = await this.factoryRepository.find();
+    return factories.map((factory) => ({
+      factory_id: factory.factory_id,
+      owner_company_ifric_id: factory.owner_company_ifric_id,
+      location_name: factory.location_name,
+      city: factory.city,
+      country: factory.country,
+    }));
   }
 
   async getFactoryById(
@@ -671,7 +683,23 @@ export class CompanyService {
     }
   }
 
-  async getCompanyAccessGroup(id: string) {
+  // Access groups are keyed on Company._id, not company_ifric_id, so the
+  // boundary has to be recovered from the row before it can be asserted.
+  private async assertCallerOwnsCompanyRecord(
+    companyId: string | undefined,
+    authUser: AuthTokenClaims,
+  ): Promise<void> {
+    const company = companyId
+      ? await this.companyRepository.findOne({ where: { _id: companyId } })
+      : null;
+    this.accessControlService.assertCompanyMatch(
+      authUser,
+      company?.company_ifric_id ?? '',
+    );
+    await this.accessControlService.assertPermission(authUser, 'read');
+  }
+
+  async getCompanyAccessGroup(id: string, authUser: AuthTokenClaims) {
     try {
       const response = await this.companyRepository.find({
         where: { company_ifric_id: id },
@@ -682,6 +710,8 @@ export class CompanyService {
           HttpStatus.NOT_FOUND,
         );
       }
+      this.accessControlService.assertCompanyMatch(authUser, id);
+      await this.accessControlService.assertPermission(authUser, 'read');
 
       return await this.accessGroupRepository.find({
         where: { company_id: response[0]._id },
@@ -697,8 +727,13 @@ export class CompanyService {
     }
   }
 
-  async getAccessGroupByGroupName(company_id: string, group_name: string) {
+  async getAccessGroupByGroupName(
+    company_id: string,
+    group_name: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
+      await this.assertCallerOwnsCompanyRecord(company_id, authUser);
       return await this.accessGroupRepository.findOne({
         where: { company_id, group_name },
       });
@@ -713,9 +748,19 @@ export class CompanyService {
     }
   }
 
-  async getAccessGroup(id: string) {
+  async getAccessGroup(id: string, authUser: AuthTokenClaims) {
     try {
-      return await this.accessGroupRepository.findOne({ where: { _id: id } });
+      const accessGroup = await this.accessGroupRepository.findOne({
+        where: { _id: id },
+      });
+      if (!accessGroup) {
+        return accessGroup;
+      }
+      await this.assertCallerOwnsCompanyRecord(
+        accessGroup.company_id,
+        authUser,
+      );
+      return accessGroup;
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -771,14 +816,20 @@ export class CompanyService {
     }
   }
 
+  // Cross-company reads are allowed but projected: the full record is the
+  // caller's own company only. See PublicCompanyService for what "public"
+  // means and why it is an allow-list.
   async getCompanyDetails(id: string, authUser: AuthTokenClaims) {
     try {
-      this.accessControlService.assertCompanyMatch(authUser, id);
       await this.accessControlService.assertPermission(authUser, 'read');
 
-      return await this.companyRepository.find({
+      const companies = await this.companyRepository.find({
         where: { company_ifric_id: id },
       });
+      if (this.accessControlService.isOwnCompany(authUser, id)) {
+        return companies;
+      }
+      return await this.publicCompanyService.toPublicCompanies(companies);
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -795,14 +846,19 @@ export class CompanyService {
       const companies = await this.companyRepository.find({
         where: { _id: id },
       });
-      if (companies.length) {
-        this.accessControlService.assertCompanyMatch(
+      if (!companies.length) {
+        return companies;
+      }
+      await this.accessControlService.assertPermission(authUser, 'read');
+      if (
+        this.accessControlService.isOwnCompany(
           authUser,
           companies[0].company_ifric_id,
-        );
-        await this.accessControlService.assertPermission(authUser, 'read');
+        )
+      ) {
+        return companies;
       }
-      return companies;
+      return await this.publicCompanyService.toPublicCompanies(companies);
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -828,8 +884,13 @@ export class CompanyService {
       if (!company) {
         return [];
       }
-      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
       await this.accessControlService.assertPermission(authUser, 'read');
+      // The named admin, their position and the company mailbox are not
+      // public — a foreign caller gets the public profile instead, which
+      // still carries the postal address this endpoint is mostly used for.
+      if (!this.accessControlService.isOwnCompany(authUser, company_ifric_id)) {
+        return await this.publicCompanyService.toPublicCompanies([company]);
+      }
 
       return [
         {
@@ -897,9 +958,24 @@ export class CompanyService {
     }
   }
 
-  async getCompanyDetailsByEmail(email: string) {
+  // Was unscoped and returned raw Company rows to any authenticated caller
+  // — including registration_number, meta_data and the legacy
+  // temp_password column. Now the caller's own company is the only one that
+  // resolves to a full record.
+  async getCompanyDetailsByEmail(email: string, authUser: AuthTokenClaims) {
     try {
-      return await this.companyRepository.find({ where: { email } });
+      await this.accessControlService.assertPermission(authUser, 'read');
+      const companies = await this.companyRepository.find({ where: { email } });
+      if (
+        companies.length &&
+        this.accessControlService.isOwnCompany(
+          authUser,
+          companies[0].company_ifric_id,
+        )
+      ) {
+        return companies;
+      }
+      return await this.publicCompanyService.toPublicCompanies(companies);
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -911,9 +987,34 @@ export class CompanyService {
     }
   }
 
-  async getCompanyDetailsByName(company_name: string) {
+  // Same over-exposure as getCompanyDetailsByEmail. Company names are not
+  // unique, so this projects per row rather than off the first match.
+  async getCompanyDetailsByName(
+    company_name: string,
+    authUser: AuthTokenClaims,
+  ) {
     try {
-      return await this.companyRepository.find({ where: { company_name } });
+      await this.accessControlService.assertPermission(authUser, 'read');
+      const companies = await this.companyRepository.find({
+        where: { company_name },
+      });
+      const own = companies.filter((company) =>
+        this.accessControlService.isOwnCompany(
+          authUser,
+          company.company_ifric_id,
+        ),
+      );
+      const foreign = companies.filter(
+        (company) =>
+          !this.accessControlService.isOwnCompany(
+            authUser,
+            company.company_ifric_id,
+          ),
+      );
+      return [
+        ...own,
+        ...(await this.publicCompanyService.toPublicCompanies(foreign)),
+      ];
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;
@@ -949,8 +1050,14 @@ export class CompanyService {
       if (!company) {
         return [];
       }
-      this.accessControlService.assertCompanyMatch(authUser, company_ifric_id);
       await this.accessControlService.assertPermission(authUser, 'read');
+      // The user roster is the private half of this endpoint — a foreign
+      // caller gets the public company profile with no company_users key at
+      // all. An empty array would read as "this company has no users",
+      // which is a different and untrue claim.
+      if (!this.accessControlService.isOwnCompany(authUser, company_ifric_id)) {
+        return await this.publicCompanyService.toPublicCompanies([company]);
+      }
 
       const mapping = await this.companyCategoryMappingRepository.find({
         where: { company_id: company._id },
@@ -1314,7 +1421,14 @@ export class CompanyService {
       if (!companyIds.length) {
         return [];
       }
-      return this.companyRepository.find({ where: { _id: In(companyIds) } });
+      // A cross-company directory listing, like getAllCompanies — it
+      // previously returned raw Company rows to every authenticated caller.
+      // Public projection unconditionally: there is no "own company" branch
+      // to take on a listing.
+      const companies = await this.companyRepository.find({
+        where: { _id: In(companyIds) },
+      });
+      return await this.publicCompanyService.toPublicCompanies(companies);
     } catch (err) {
       if (err instanceof HttpException) {
         throw err;

@@ -22,7 +22,6 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   Query,
   Ip,
 } from '@nestjs/common';
@@ -30,20 +29,18 @@ import { AuthService } from './auth.service';
 import { UpdateUserDetails } from './dto/update-auth.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserAccessDto } from './dto/update-user-access.dto';
-import { AuthGuard } from './auth.guard';
 import { AuthUser } from './auth-user.decorator';
 import { AuthTokenClaims } from './auth-token-claims.interface';
 import { UserAccessDto } from './dto/user-access-dto';
 import { FindOneAuthDto, FindIndexedDbAuthDto } from './dto/find-auth-dto';
 import { ApiBearerAuth, ApiTags, ApiBody } from '@nestjs/swagger';
+import { Public } from 'src/common/public.decorator';
 
 @ApiTags('Auth')
 @ApiBearerAuth('access-token')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
-  @UseGuards(AuthGuard)
   @Post('create-user/:admin_mail')
   @ApiBody({
     description:
@@ -83,6 +80,7 @@ export class AuthController {
     return this.authService.createCompanyUser(data, admin_mail, authUser);
   }
 
+  @Public()
   @Post('login')
   @ApiBody({
     description: 'User login details',
@@ -105,8 +103,6 @@ export class AuthController {
   logIn(@Body() data: FindOneAuthDto) {
     return this.authService.logIn(data);
   }
-
-  @UseGuards(AuthGuard)
   @Post('get-indexed-db-data')
   @ApiBody({
     description: 'Retrieve indexed database data',
@@ -132,76 +128,86 @@ export class AuthController {
     return this.authService.getIndexedData(data);
   }
 
-  @Get('/authenticate-token/:token')
-  authenticateToken(@Param('token') token: string) {
-    return this.authService.authenticateToken(token);
+  // POST with the token in the body, not GET /:token — a bearer token in a
+  // URL path ends up in access logs, proxy logs and browser history.
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { token: { type: 'string' } },
+      required: ['token'],
+    },
+  })
+  @Public()
+  @Post('/authenticate-token')
+  authenticateToken(@Body() data: { token: string }) {
+    return this.authService.authenticateToken(data.token);
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-company-users/:id')
-  getCompanyUsers(@Param('id') id: string) {
-    return this.authService.getCompanyUsers(id);
+  getCompanyUsers(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.authService.getCompanyUsers(id, authUser);
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-company-users-access/:company_ifric_id')
-  getCompanyUsersAccess(@Param('company_ifric_id') company_ifric_id: string) {
-    return this.authService.getCompanyUsersAccess(company_ifric_id);
+  getCompanyUsersAccess(
+    @Param('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.authService.getCompanyUsersAccess(company_ifric_id, authUser);
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-user-profile-content/:company_ifric_id/:user_id')
   getUserProfileContent(
     @Param('company_ifric_id') company_ifric_id: string,
     @Param('user_id') user_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.authService.getUserProfileContent(company_ifric_id, user_id);
+    return this.authService.getUserProfileContent(
+      company_ifric_id,
+      user_id,
+      authUser,
+    );
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-user-product-access/:id')
   getUserProductAccess(@Param('id') id: string) {
     return this.authService.getUserProductAccess(id);
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-user-details')
   getUserDetails(
     @Query('user_email') user_email: string,
     @Query('company_ifric_id') company_ifric_id: string,
+    @AuthUser() authUser: AuthTokenClaims,
   ) {
-    return this.authService.getUserDetails(user_email, company_ifric_id);
+    return this.authService.getUserDetails(
+      user_email,
+      company_ifric_id,
+      authUser,
+    );
   }
-
-  @UseGuards(AuthGuard)
   @Get('get-total-users')
   getTotalUsers() {
     return this.authService.getTotalUsers();
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-user-details/:id')
-  getUserDetailsById(@Param('id') id: string) {
-    return this.authService.getUserDetailsById(id);
+  getUserDetailsById(
+    @Param('id') id: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.authService.getUserDetailsById(id, authUser);
   }
-
-  @UseGuards(AuthGuard)
   @Get('/get-user-details-by-email/:email')
-  getUserDetailsByEmail(@Param('email') email: string) {
-    return this.authService.getUserDetailsByEmail(email);
+  getUserDetailsByEmail(
+    @Param('email') email: string,
+    @AuthUser() authUser: AuthTokenClaims,
+  ) {
+    return this.authService.getUserDetailsByEmail(email, authUser);
   }
-
-  @Get('/get-user-details-by-email-recover-password/:email')
-  getUserDetailsForRecoverPassword(@Param('email') email: string) {
-    return this.authService.getUserDetailsByEmail(email);
-  }
-
-  @UseGuards(AuthGuard)
   @Get('check-company-admin/:email')
   async checkCompanyAdmin(@Param('email') email: string) {
     return this.authService.checkCompanyAdmin(email);
   }
 
+  @Public()
   @Patch('/update-password')
   @ApiBody({
     description:
@@ -233,8 +239,6 @@ export class AuthController {
   updateUserPassword(@Body() data: UpdatePasswordDto) {
     return this.authService.updateUserPassword(data);
   }
-
-  @UseGuards(AuthGuard)
   @Patch('/update-user-access-group/:id')
   @ApiBody({
     description:
@@ -258,8 +262,6 @@ export class AuthController {
   ) {
     return this.authService.updateUserAccessGroup(id, data);
   }
-
-  @UseGuards(AuthGuard)
   @Patch('/update-company-user')
   @ApiBody({
     description:
@@ -312,13 +314,12 @@ export class AuthController {
   updateCompanyUser(@Body() data: UpdateUserDetails) {
     return this.authService.updateCompanyUser(data);
   }
-
-  @UseGuards(AuthGuard)
   @Delete('/delete-company-user/:id')
   deleteCompanyUser(@Param('id') id: string) {
     return this.authService.deleteCompanyUser(id);
   }
 
+  @Public()
   @Post('logout')
   @ApiBody({
     description:
@@ -346,6 +347,7 @@ export class AuthController {
     return this.authService.logOut(data);
   }
 
+  @Public()
   @Post('refresh')
   @ApiBody({
     description:
@@ -370,6 +372,7 @@ export class AuthController {
     return this.authService.refreshAccessToken(refreshToken);
   }
 
+  @Public()
   @Post('recover-password-request')
   @ApiBody({
     description:
@@ -402,6 +405,7 @@ export class AuthController {
     return this.authService.recoverPasswordRequest(body.email, ip);
   }
 
+  @Public()
   @Post('recover-password')
   @ApiBody({
     description:
