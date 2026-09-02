@@ -65,8 +65,23 @@ export interface CompanyRegistrationEvent {
  * No implementation is bound by default, so this service behaves exactly as
  * it did before unless a deployment provides one.
  */
+/**
+ * Anything the hook wants the caller to know, merged into the registration
+ * response. Use it to report work that was attempted but is not worth failing
+ * a completed registration over — a welcome email that could not be sent, say,
+ * where the caller can still show the credential to whoever registered.
+ */
+export type CompanyRegistrationOutcome = Record<string, unknown>;
+
 export interface CompanyRegistrationHook {
-  onCompanyRegistered(event: CompanyRegistrationEvent): Promise<void>;
+  /**
+   * Returning a value adds it to the registration response. Throwing rolls
+   * the registration back — so throw for work that must succeed, and return
+   * a flag for work that may fail without invalidating the registration.
+   */
+  onCompanyRegistered(
+    event: CompanyRegistrationEvent,
+  ): Promise<CompanyRegistrationOutcome | void>;
   onRegistrationRolledBack(event: CompanyRegistrationEvent): Promise<void>;
 }
 

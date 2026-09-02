@@ -99,7 +99,7 @@ describe('CompanyService', () => {
   };
   let userAccessGroupRepository: { delete: jest.Mock };
   let certificateService: { verifyAllCompanyCertificate: jest.Mock };
-  let keycloakService: { createUser: jest.Mock };
+  let keycloakService: { createUser: jest.Mock; deleteUser: jest.Mock };
   let dataSource: { createQueryRunner: jest.Mock };
   let mockQueryRunner: any;
   let registrationHook: {
@@ -126,7 +126,10 @@ describe('CompanyService', () => {
     };
 
     certificateService = { verifyAllCompanyCertificate: jest.fn() };
-    keycloakService = { createUser: jest.fn().mockResolvedValue('kc-user-1') };
+    keycloakService = {
+      createUser: jest.fn().mockResolvedValue('kc-user-1'),
+      deleteUser: jest.fn().mockResolvedValue(undefined),
+    };
 
     factoryRepository = {
       find: jest.fn(),
@@ -703,6 +706,67 @@ describe('CompanyService', () => {
       registrationHook.onRegistrationRolledBack.mockRejectedValue(
         new Error('compensation also failed'),
       );
+
+      await expect(service.createCompany(registration)).rejects.toThrow(
+        'the real problem',
+      );
+    });
+
+    it('merges what the hook reports into the registration response', async () => {
+      registrationHook.onCompanyRegistered.mockResolvedValue({
+        emailSent: false,
+      });
+
+      // Work that may fail without invalidating the registration is reported
+      // rather than thrown, so the caller can act on it.
+      await expect(service.createCompany(registration)).resolves.toMatchObject({
+        success: true,
+        status: 201,
+        emailSent: false,
+      });
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('returns the plain response when the hook reports nothing', async () => {
+      registrationHook.onCompanyRegistered.mockResolvedValue(undefined);
+
+      const result = await service.createCompany(registration);
+
+      expect(result).toMatchObject({ success: true, status: 201 });
+      expect(result).not.toHaveProperty('emailSent');
+    });
+
+    it('deletes the Keycloak account when the registration is rolled back', async () => {
+      registrationHook.onCompanyRegistered.mockRejectedValue(
+        new Error('mail server refused'),
+      );
+
+      await expect(service.createCompany(registration)).rejects.toThrow();
+
+      // The identity lives outside this database, so the transaction
+      // rollback cannot reach it. Left behind, it makes the address
+      // unregisterable: a retry fails with "user already exists".
+      expect(keycloakService.deleteUser).toHaveBeenCalledWith(
+        'admin@example.com',
+      );
+    });
+
+    it('does not delete a Keycloak account it never created', async () => {
+      // A conflict means the address already belonged to somebody.
+      keycloakService.createUser.mockRejectedValue(
+        new Error('User exists with same username'),
+      );
+
+      await expect(service.createCompany(registration)).rejects.toThrow();
+
+      expect(keycloakService.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('still reports the original error when the Keycloak cleanup fails', async () => {
+      registrationHook.onCompanyRegistered.mockRejectedValue(
+        new Error('the real problem'),
+      );
+      keycloakService.deleteUser.mockRejectedValue(new Error('keycloak down'));
 
       await expect(service.createCompany(registration)).rejects.toThrow(
         'the real problem',

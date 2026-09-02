@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { UpdateUserDetails } from './dto/update-auth.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserAccessDto } from './dto/update-user-access.dto';
@@ -52,6 +52,8 @@ const RECOVERY_THROTTLE_MS = 60_000;
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
@@ -76,6 +78,9 @@ export class AuthService {
     adminMail: string,
     authUser: AuthTokenClaims,
   ) {
+    // The Keycloak identity is created before the local rows and lives
+    // outside this database, so nothing else here can undo it.
+    let keycloakUserEmail: string | null = null;
     try {
       this.accessControlService.assertCompanyMatch(
         authUser,
@@ -127,6 +132,10 @@ export class AuthService {
         temporaryPassword,
         { company_ifric_id: data.company_ifric_id, user_id: newUserId },
       );
+      // Only set once the identity exists. createUser throws on a conflict,
+      // so reaching here means this call created it — the cleanup below can
+      // never remove somebody's pre-existing account.
+      keycloakUserEmail = data.user_email;
 
       const response = await this.companyUserRepository.save(
         this.companyUserRepository.create({
@@ -168,6 +177,21 @@ export class AuthService {
         temporaryPassword,
       };
     } catch (err) {
+      // Otherwise a failure after the identity was provisioned leaves an
+      // account with no CompanyUser behind it: the caller is told the user
+      // was not created, and creating it again fails with "user already
+      // exists".
+      if (keycloakUserEmail) {
+        try {
+          await this.keycloakService.deleteUser(keycloakUserEmail);
+        } catch (keycloakErr) {
+          this.logger.error(
+            `Could not remove the Keycloak account for ${keycloakUserEmail} ` +
+              `after a failed user creation: ${keycloakErr.message}. It must ` +
+              `be deleted by hand before that address can be added again.`,
+          );
+        }
+      }
       if (err instanceof HttpException) {
         throw err;
       } else if (err.response) {

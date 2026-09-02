@@ -352,6 +352,9 @@ export class CompanyService {
     // Kept outside the try so the rollback path can tell the hook what to
     // compensate. Null until the company and its admin actually exist.
     let registrationEvent: CompanyRegistrationEvent | null = null;
+    // The Keycloak identity is created outside this database, so the
+    // transaction rollback cannot reach it. Tracked here so the catch can.
+    let keycloakUserEmail: string | null = null;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     try {
@@ -507,6 +510,10 @@ export class CompanyService {
         temporaryPassword,
         { company_ifric_id: data.company_ifric_id, user_id: adminUserId },
       );
+      // Only set once the identity actually exists. createUser throws on a
+      // conflict, so reaching here means this call created it and no
+      // pre-existing account can be deleted by the rollback below.
+      keycloakUserEmail = data.email;
       const user = await queryRunner.manager.save(
         CompanyUser,
         queryRunner.manager.create(CompanyUser, {
@@ -547,11 +554,11 @@ export class CompanyService {
         temporaryPassword,
         manager: queryRunner.manager,
       };
-      if (this.companyRegistrationHook) {
-        await this.companyRegistrationHook.onCompanyRegistered(
-          registrationEvent,
-        );
-      }
+      const registrationOutcome = this.companyRegistrationHook
+        ? await this.companyRegistrationHook.onCompanyRegistered(
+            registrationEvent,
+          )
+        : undefined;
 
       await queryRunner.commitTransaction();
 
@@ -561,6 +568,10 @@ export class CompanyService {
         message: 'Company created successfully',
         company_ifric_id: data.company_ifric_id,
         temporaryPassword,
+        // Whatever the hook reported about work it attempted alongside the
+        // registration, so the caller can act on a step that did not succeed
+        // without the registration itself having failed.
+        ...(registrationOutcome ?? {}),
       };
     } catch (err) {
       if (queryRunner.isTransactionActive) {
@@ -578,6 +589,22 @@ export class CompanyService {
           this.logger.error(
             `Could not undo external registration side effects for ` +
               `${registrationEvent.data.email}: ${hookErr.message}`,
+          );
+        }
+      }
+
+      // Without this the admin's Keycloak account outlives the company it
+      // was created for: the registration reports failure, but retrying with
+      // the same address fails again with "user already exists", and the
+      // orphan carries attributes pointing at rows that no longer exist.
+      if (keycloakUserEmail) {
+        try {
+          await this.keycloakService.deleteUser(keycloakUserEmail);
+        } catch (keycloakErr) {
+          this.logger.error(
+            `Could not remove the Keycloak account for ${keycloakUserEmail} ` +
+              `after a failed registration: ${keycloakErr.message}. It must ` +
+              `be deleted by hand before that address can register again.`,
           );
         }
       }
