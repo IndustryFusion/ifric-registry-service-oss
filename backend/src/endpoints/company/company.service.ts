@@ -14,7 +14,14 @@
 // limitations under the License.
 //
 
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, ILike, In, Repository } from 'typeorm';
 import axios from 'axios';
@@ -51,9 +58,16 @@ import {
 } from 'src/common/access-control.service';
 import { PublicCompanyService } from 'src/common/public-company.service';
 import { AuthTokenClaims } from '../auth/auth-token-claims.interface';
+import {
+  COMPANY_REGISTRATION_HOOK,
+  CompanyRegistrationEvent,
+  CompanyRegistrationHook,
+} from './company-registration.hook';
 
 @Injectable()
 export class CompanyService {
+  private readonly logger = new Logger(CompanyService.name);
+
   constructor(
     @InjectRepository(Company) private companyRepository: Repository<Company>,
     @InjectRepository(Asset)
@@ -79,6 +93,9 @@ export class CompanyService {
     private readonly accessControlService: AccessControlService,
     private readonly publicCompanyService: PublicCompanyService,
     @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional()
+    @Inject(COMPANY_REGISTRATION_HOOK)
+    private readonly companyRegistrationHook: CompanyRegistrationHook | null = null,
   ) {}
 
   private readonly icidUrl = envConstants.icidServiceBackendUrl;
@@ -332,6 +349,9 @@ export class CompanyService {
   // can't be rolled back by SQL.
   async createCompany(data: RegisterAuthDto) {
     let temp_icid_company_id: string | null = null;
+    // Kept outside the try so the rollback path can tell the hook what to
+    // compensate. Null until the company and its admin actually exist.
+    let registrationEvent: CompanyRegistrationEvent | null = null;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     try {
@@ -516,6 +536,22 @@ export class CompanyService {
         );
       }
 
+      // Inside the transaction on purpose: a deployment that cannot record
+      // this company externally can throw here and the whole registration —
+      // company, admin user, access groups, and the IFRIC id reserved above —
+      // is undone, rather than leaving the two systems disagreeing.
+      registrationEvent = {
+        data,
+        companyId: company._id,
+        userId: user._id,
+        temporaryPassword,
+      };
+      if (this.companyRegistrationHook) {
+        await this.companyRegistrationHook.onCompanyRegistered(
+          registrationEvent,
+        );
+      }
+
       await queryRunner.commitTransaction();
 
       return {
@@ -529,6 +565,22 @@ export class CompanyService {
       if (queryRunner.isTransactionActive) {
         await queryRunner.rollbackTransaction();
       }
+      // Whatever the hook created lives outside this database, so the
+      // rollback above does not touch it. Its own failure is logged rather
+      // than thrown: it must not replace the error the caller needs to see.
+      if (this.companyRegistrationHook && registrationEvent) {
+        try {
+          await this.companyRegistrationHook.onRegistrationRolledBack(
+            registrationEvent,
+          );
+        } catch (hookErr) {
+          this.logger.error(
+            `Could not undo external registration side effects for ` +
+              `${registrationEvent.data.email}: ${hookErr.message}`,
+          );
+        }
+      }
+
       if (temp_icid_company_id) {
         await axios.delete(`${this.icidUrl}/company/` + temp_icid_company_id, {
           headers: {

@@ -37,6 +37,7 @@ import { CertificateService } from '../certificate/certificate.service';
 import { RegisterAuthDto } from '../auth/dto/register-auth.dto';
 import { AccessControlService } from 'src/common/access-control.service';
 import { PublicCompanyService } from 'src/common/public-company.service';
+import { COMPANY_REGISTRATION_HOOK } from './company-registration.hook';
 
 // Stand-in for whatever PublicCompanyService returns — the exact field list
 // is that service's own contract (and its own spec); what matters here is
@@ -101,6 +102,10 @@ describe('CompanyService', () => {
   let keycloakService: { createUser: jest.Mock };
   let dataSource: { createQueryRunner: jest.Mock };
   let mockQueryRunner: any;
+  let registrationHook: {
+    onCompanyRegistered: jest.Mock;
+    onRegistrationRolledBack: jest.Mock;
+  };
   let idCounter: number;
   let accessControlService: {
     assertCompanyMatch: jest.Mock;
@@ -187,6 +192,10 @@ describe('CompanyService', () => {
       }),
       findOne: jest.fn(),
     };
+    registrationHook = {
+      onCompanyRegistered: jest.fn().mockResolvedValue(undefined),
+      onRegistrationRolledBack: jest.fn().mockResolvedValue(undefined),
+    };
     mockQueryRunner = {
       connect: jest.fn(),
       startTransaction: jest.fn(),
@@ -240,6 +249,7 @@ describe('CompanyService', () => {
         { provide: AccessControlService, useValue: accessControlService },
         { provide: PublicCompanyService, useValue: publicCompanyService },
         { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: COMPANY_REGISTRATION_HOOK, useValue: registrationHook },
       ],
     }).compile();
 
@@ -586,6 +596,125 @@ describe('CompanyService', () => {
       expect(factoryRepository.delete).toHaveBeenCalledWith({
         factory_id: 'urn:ifric:fac-1',
       });
+    });
+  });
+
+  describe('createCompany registration hook', () => {
+    const registration = {
+      email: 'admin@example.com',
+      company_name: 'Acme GmbH',
+      country: 'Germany',
+      admin_name: 'Ada',
+      company_category: 'manufacturer',
+    } as any;
+
+    beforeEach(() => {
+      companyRepository.find.mockResolvedValue([]);
+      (axios.post as jest.Mock).mockResolvedValue({
+        data: { status: '201', urn_id: 'urn:ifric:ifx-eur-com-own-new' },
+      });
+      (axios.delete as jest.Mock).mockResolvedValue({});
+      // createCompany makes three lookups through the transaction's manager:
+      // the category must exist, the admin user must not, and the admin
+      // access group it just created is read back to grant the role.
+      mockQueryRunner.manager.findOne.mockImplementation(
+        async (entity: any) => {
+          switch (entity?.name) {
+            case 'CompanyCategory':
+              return { _id: 'cat-1', category_name: 'manufacturer' };
+            case 'AccessGroup':
+              return { _id: 'ag-admin', group_name: 'admin' };
+            default:
+              return null;
+          }
+        },
+      );
+    });
+
+    // This file shares one module-level axios mock and never clears it, so
+    // call counts leak between tests. These are the only tests here that
+    // drive createCompany to the point of minting an IFRIC id, so they clean
+    // up after themselves rather than changing how every other test runs.
+    afterEach(() => {
+      (axios.post as jest.Mock).mockClear();
+      (axios.delete as jest.Mock).mockClear();
+    });
+
+    it('runs the hook before the commit, so the hook can still veto', async () => {
+      await service.createCompany(registration);
+
+      expect(registrationHook.onCompanyRegistered).toHaveBeenCalledTimes(1);
+      const hookOrder =
+        registrationHook.onCompanyRegistered.mock.invocationCallOrder[0];
+      const commitOrder =
+        mockQueryRunner.commitTransaction.mock.invocationCallOrder[0];
+      expect(hookOrder).toBeLessThan(commitOrder);
+    });
+
+    it('tells the hook who was created, and the first-login password', async () => {
+      await service.createCompany(registration);
+
+      const event = registrationHook.onCompanyRegistered.mock.calls[0][0];
+      expect(event.companyId).toEqual(expect.any(String));
+      expect(event.userId).toEqual(expect.any(String));
+      expect(event.temporaryPassword).toEqual(expect.any(String));
+      expect(event.data.company_ifric_id).toBe('urn:ifric:ifx-eur-com-own-new');
+    });
+
+    it('rolls the registration back when the hook refuses', async () => {
+      registrationHook.onCompanyRegistered.mockRejectedValue(
+        new Error('CRM rejected the account'),
+      );
+
+      await expect(service.createCompany(registration)).rejects.toThrow(
+        'CRM rejected the account',
+      );
+
+      // The whole registration is undone, including the reserved IFRIC id.
+      expect(mockQueryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(axios.delete).toHaveBeenCalledWith(
+        expect.stringContaining('urn:ifric:ifx-eur-com-own-new'),
+        expect.anything(),
+      );
+    });
+
+    it('asks the hook to compensate when the registration is rolled back', async () => {
+      registrationHook.onCompanyRegistered.mockRejectedValue(
+        new Error('CRM half-wrote the record'),
+      );
+
+      await expect(service.createCompany(registration)).rejects.toThrow();
+
+      // A hook can fail after creating something, so it is compensated even
+      // when it is the thing that failed.
+      expect(registrationHook.onRegistrationRolledBack).toHaveBeenCalledTimes(
+        1,
+      );
+    });
+
+    it('does not let a failed compensation mask the original error', async () => {
+      registrationHook.onCompanyRegistered.mockRejectedValue(
+        new Error('the real problem'),
+      );
+      registrationHook.onRegistrationRolledBack.mockRejectedValue(
+        new Error('compensation also failed'),
+      );
+
+      await expect(service.createCompany(registration)).rejects.toThrow(
+        'the real problem',
+      );
+    });
+
+    it('does not compensate a registration that never got that far', async () => {
+      // Duplicate email: rejected before anything external exists.
+      companyRepository.find.mockResolvedValue([{ _id: 'existing' }]);
+
+      await expect(service.createCompany(registration)).rejects.toThrow(
+        'Mail Id already exists',
+      );
+
+      expect(registrationHook.onRegistrationRolledBack).not.toHaveBeenCalled();
     });
   });
 
