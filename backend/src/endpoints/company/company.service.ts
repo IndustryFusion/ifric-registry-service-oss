@@ -545,6 +545,7 @@ export class CompanyService {
         companyId: company._id,
         userId: user._id,
         temporaryPassword,
+        manager: queryRunner.manager,
       };
       if (this.companyRegistrationHook) {
         await this.companyRegistrationHook.onCompanyRegistered(

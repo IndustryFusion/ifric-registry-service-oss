@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+import { EntityManager } from 'typeorm';
 import { RegisterAuthDto } from '../auth/dto/register-auth.dto';
 
 /** What a registration hook is told about the company that was just created. */
@@ -29,6 +30,15 @@ export interface CompanyRegistrationEvent {
    * it however it delivers credentials; this service does not send mail.
    */
   temporaryPassword: string;
+  /**
+   * The registration transaction's manager. Rows written through it are
+   * committed with the registration and rolled back with it, so a deployment
+   * storing its own per-company records (a subscription, an entitlement) gets
+   * the same all-or-nothing guarantee as the company itself. Writing through
+   * a repository instead would put those rows in their own transaction, and
+   * a later failure would strand them.
+   */
+  manager: EntityManager;
 }
 
 /**

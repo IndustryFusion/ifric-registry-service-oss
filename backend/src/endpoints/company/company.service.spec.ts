@@ -659,6 +659,9 @@ describe('CompanyService', () => {
       expect(event.userId).toEqual(expect.any(String));
       expect(event.temporaryPassword).toEqual(expect.any(String));
       expect(event.data.company_ifric_id).toBe('urn:ifric:ifx-eur-com-own-new');
+      // The transaction's own manager, so rows the hook writes commit and
+      // roll back with the registration rather than in their own transaction.
+      expect(event.manager).toBe(mockQueryRunner.manager);
     });
 
     it('rolls the registration back when the hook refuses', async () => {
