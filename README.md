@@ -87,9 +87,18 @@ signs a JWT itself. Two Keycloak clients are involved:
   kept separate so a leaked end-user-facing client secret can't also
   manage the realm's users.
 
-Both clients, plus two protocol mappers on `ifric`, must already exist in
+Both clients, plus the protocol mappers on `ifric`, must already exist in
 the target realm — this is a one-time manual step (the app fails fast at
 boot without them):
+
+> **Federating with a dataspace?** Add a third mapper on `ifric`: User
+> Attribute `company_ifric_id` → Token Claim Name **`participant_id`**. The
+> two are the same value under two names, and a dataspace gateway reads only
+> `participant_id` — without it a valid user token is refused with *“Token is
+> missing the 'participant_id' claim.”* It cannot be worked around in the
+> calling application: the claim lives inside a Keycloak-signed JWT. Safe to
+> add regardless, and unnecessary if you do not federate. Details in
+> [`docs/keycloak-setup.md`](docs/keycloak-setup.md#emitting-participant_id-for-dataspace-calls).
 
 - **Doing it:** [`docs/keycloak-first-time-checklist.md`](docs/keycloak-first-time-checklist.md)
   — click-by-click admin-console steps, for both local Docker and

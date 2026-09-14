@@ -183,17 +183,30 @@ realm predates that.)
 Copy the secret from the **Credentials** tab — that's
 `KEYCLOAK_CLIENT_SECRET`.
 
-## 5. Add two protocol mappers to `ifric`
+## 5. Add the protocol mappers to `ifric`
 
 **Clients** → `ifric` → **Client scopes** tab → **`ifric-dedicated`** →
 **Add mapper** → **By configuration** → **User Attribute**.
 
-Do this twice, once per row:
+Do this once per row:
 
 | Name | User Attribute | Token Claim Name | Claim JSON Type | Add to access token |
 |---|---|---|---|---|
 | `company_ifric_id` | `company_ifric_id` | `company_ifric_id` | `String` | **On** |
 | `user_id` | `user_id` | `user_id` | `String` | **On** |
+| `participant_id` | `company_ifric_id` | `participant_id` | `String` | **On** |
+
+The third row is not a typo: it reads the **same stored attribute** as the
+first and emits it under a second name. A company onboarded into an IFRIC
+dataspace has `participant_id` equal to its `company_ifric_id` verbatim, and
+a dataspace gateway reads only `participant_id` — so without this mapper a
+user token authenticates and is then refused with *“Token is missing the
+'participant_id' claim.”*
+
+Skip it if you do not federate with a dataspace; nothing in this service
+requires it. Adding it is safe either way — `AccessControlService.resolveClaims`
+returns as soon as it sees `company_ifric_id` and never reads
+`participant_id` on a token that carries both.
 
 ## 6. Create the `ifric-admin` client (Admin API)
 

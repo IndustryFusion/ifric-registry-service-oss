@@ -56,13 +56,17 @@ You need to create, in the target realm:
    `manage-users` role — used only for Admin API calls (create/reset-
    password/delete users). Kept separate from `ifric` so a leaked
    end-user-facing client secret can't also manage the realm's users.
-4. Two **User Attribute** protocol mappers on the `ifric` client (Client
+4. **User Attribute** protocol mappers on the `ifric` client (Client
    scopes → `ifric`-dedicated → Mappers → Add mapper → By configuration →
    User Attribute):
    - User Attribute `company_ifric_id` → Token Claim Name
      `company_ifric_id`, Claim JSON Type `String`, **Add to access token** on.
    - User Attribute `user_id` → Token Claim Name `user_id`, Claim JSON Type
      `String`, **Add to access token** on.
+   - *(Only when federating with a dataspace)* User Attribute
+     `company_ifric_id` → Token Claim Name **`participant_id`**, Claim JSON
+     Type `String`, **Add to access token** on. See
+     [Emitting `participant_id` for dataspace calls](#emitting-participant_id-for-dataspace-calls).
 
    Every `CompanyUser` gets these two attributes stamped onto its Keycloak
    account the moment it's created (`CompanyService.createCompany`,
@@ -298,3 +302,95 @@ A few things worth noting from this picture:
   checks: normalize once at the boundary, and everything downstream sees a
   single shape. A change that makes a call site aware of `participant_id`
   is a sign the boundary has been breached.
+
+### Emitting `participant_id` for dataspace calls
+
+A user token issued by the `ifric` client carries `company_ifric_id`. A
+dataspace gateway reads **`participant_id`** and nothing else, so that same
+user is refused:
+
+```json
+{"detail": "Token is missing the 'participant_id' claim."}
+```
+
+The two are the **same value under two names** for any participant onboarded
+from IFRIC — this service relies on that already, resolving a participant by
+looking a company up directly:
+
+```ts
+// AccessControlService.resolveClaims
+where: { company_ifric_id: resolved.participant_id }
+```
+
+So the fix is one more mapper on `ifric`, reading the attribute that is
+already stored:
+
+| Setting | Value |
+|---|---|
+| Mapper type | User Attribute |
+| User Attribute | `company_ifric_id` |
+| Token Claim Name | `participant_id` |
+| Claim JSON Type | `String` |
+| Add to access token | **On** |
+
+No new attribute, no migration, no change to how users are provisioned — the
+value `CompanyService.createCompany` already stamps is projected under a
+second name.
+
+**Why it cannot be done in the calling application.** The claim is inside a
+JWT signed by Keycloak; a client cannot add one without invalidating the
+signature. Nor can the sender be supplied out of band — a gateway derives it
+from the token precisely so that no caller can assert an identity it was not
+issued. Doing it in the mapper is the only place it can be done.
+
+**Safe to add even if you never federate.** `resolveClaims` returns as soon
+as it sees `company_ifric_id`, so on a token carrying both claims the
+`participant_id` branch is never reached and cannot contradict it.
+
+**What the mapper does not do.** It makes a token *say* which participant the
+caller is; it does not make that participant **exist**. A dataspace registers
+each participant with its own adapter and routing endpoints, so a company
+that has not been onboarded will present a valid claim and still have nowhere
+to route. Treat the mapper as necessary, not sufficient.
+
+### Service-account callers and asset lookups
+
+A machine caller authenticating with the **client-credentials** grant gets a
+token with **no `company_ifric_id`** — a service account belongs to no company.
+That is fine for most of the API, where `assertPermission` and `isOwnCompany`
+simply find nothing to match and answer accordingly, but it collides with one
+check in particular.
+
+`AssetService.assertCallerIsPartyTo` admits only an asset's **manufacturer** or
+its **owner**:
+
+```ts
+if (!partyIfricIds.includes(authUser.company_ifric_id)) {
+  throw new ForbiddenException("Caller's company is not a party to this asset");
+}
+```
+
+It guards four lookups — `getAssetByAssetIfricId`, `getAssetManufacturer`,
+`getAssetOwner` and `getAssetFactoryLocation`. A service account is a party to
+nothing, so **every one of them answers 403**, on every asset.
+
+That is the correct default for a company-facing API. It is the wrong rule for
+a *public* read surface — a product-passport viewer, say, where anyone scanning
+a QR code must see the passport whoever made the product.
+
+If your deployment needs one, do **not** relax the check itself. Grant the
+exemption to an explicit, revocable identity instead:
+
+1. Create a realm role (e.g. `asset-reader`) and assign it to that client's
+   service account. A realm role assigned this way already arrives in
+   `realm_access.roles` on a client-credentials token — no protocol mapper
+   needed.
+2. Have the deployment's own layer skip `assertCallerIsPartyTo` for holders of
+   that role, and **only** for those four lookups. Creating, updating and
+   deleting an asset are guarded by `assertCompanyMatch` and `assertPermission`
+   instead; leaving those alone is what keeps a read exemption from becoming a
+   write one.
+
+Keying on a role rather than on the client id (`azp`) means the grant survives
+a client rename and can be extended to a second service without a code change,
+and it can be revoked from the realm without a deployment.
