@@ -159,12 +159,24 @@ export class CompanyController {
       'company via owner_company_ifric_id.',
   })
   @ApiBody({
-    description: 'Details for creating a factory',
+    description:
+      'Details for creating a factory. Send factory_key and the identifier ' +
+      'is minted for you; send factory_id only to register a factory that ' +
+      'already has one.',
     required: true,
     schema: {
       type: 'object',
-      required: ['factory_id', 'owner_company_ifric_id'],
+      required: ['owner_company_ifric_id'],
       properties: {
+        factory_key: {
+          type: 'string',
+          description:
+            "The caller's stable handle for this factory, unique within the " +
+            'owning company. The identifier is derived from it, so it must ' +
+            'not be anything a user can later edit — a name would change the ' +
+            'factory identity on rename. Not stored.',
+          example: '7b1f0d5a-2c64-4a1e-9f3b-8f3d2a5c6e71',
+        },
         factory_id: {
           type: 'string',
           example:

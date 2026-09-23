@@ -100,6 +100,7 @@ export class CompanyService {
 
   private readonly icidUrl = envConstants.icidServiceBackendUrl;
   private readonly company_default_code = envConstants.companyDefaultCode;
+  private readonly factory_default_code = envConstants.factoryDefaultCode;
   private readonly certificatesEnabled = envConstants.certificatesEnabled;
 
   // ===========================================================================
@@ -214,7 +215,57 @@ export class CompanyService {
     return assets.map((asset) => asset.asset_ifric_id);
   }
 
+  /**
+   * A globally unique identifier for a factory, from the ICID service.
+   *
+   * Derived from the owning company and a caller-supplied factory key, and
+   * from nothing else. The factory's *name* is deliberately not an input:
+   * ICID hashes these inputs deterministically, so a rename would otherwise
+   * change the identity of a factory already referenced elsewhere.
+   *
+   * The region comes from the owning company's country, the same derivation
+   * createCompany uses, so a company and its factories share a region code.
+   */
+  private async mintFactoryId(
+    ownerCompanyIfricId: string,
+    factoryKey: string,
+    ownerCountry: string,
+  ): Promise<string> {
+    const countryCode = getCountryCode(ownerCountry);
+    if (!countryCode || !countries[countryCode]) {
+      throw new HttpException(
+        `The owning company's country "${ownerCountry}" is not a country ` +
+          'this service recognises, so a region code cannot be derived for ' +
+          'the factory identifier.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const regionCode = countries[countryCode].continent;
+    const factoryCodeArr = this.factory_default_code.split('-');
+
+    const ifricResponse = await axios.post(
+      `${this.icidUrl}/factory`,
+      {
+        dataspace_code: factoryCodeArr[0],
+        object_type_code: factoryCodeArr[1],
+        object_sub_type_code: factoryCodeArr[2],
+        region_code: regionCode,
+        owner_company_ifric_id: ownerCompanyIfricId,
+        factory_key: factoryKey,
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    if (ifricResponse.data.status != '201') {
+      throw new HttpException(
+        ifricResponse.data.message,
+        ifricResponse.data.status,
+      );
+    }
+    return ifricResponse.data.urn_id;
+  }
+
   async createFactory(data: CreateFactoryDto, authUser: AuthTokenClaims) {
+    let temp_icid_factory_id: string | undefined;
     try {
       const ownerCompany = await this.companyRepository.find({
         where: { company_ifric_id: data.owner_company_ifric_id },
@@ -231,19 +282,55 @@ export class CompanyService {
       );
       await this.accessControlService.assertPermission(authUser, 'create');
 
+      // A caller that brings its own factory_id keeps it — that is how every
+      // factory was registered before identifiers were minted centrally, and
+      // those ids stay valid. A caller that sends factory_key instead gets a
+      // globally unique id minted here, which is what new callers do.
+      if (!data.factory_id) {
+        if (!data.factory_key) {
+          throw new HttpException(
+            'Either factory_id or factory_key is required',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        data.factory_id = await this.mintFactoryId(
+          data.owner_company_ifric_id,
+          data.factory_key,
+          ownerCompany[0].country,
+        );
+        temp_icid_factory_id = data.factory_id;
+      }
+
       const existing = await this.factoryRepository.find({
         where: { factory_id: data.factory_id },
       });
       if (existing.length > 0) {
         throw new HttpException('Factory already exists', HttpStatus.CONFLICT);
       }
-      await this.factoryRepository.save(this.factoryRepository.create(data));
+      // factory_key is the mint's natural key, not a column on this table.
+      const { factory_key, ...row } = data;
+      await this.factoryRepository.save(this.factoryRepository.create(row));
       return {
         success: true,
         status: 201,
         message: 'Factory created successfully',
+        factory_id: data.factory_id,
       };
     } catch (err) {
+      // The mint is external and cannot join the database's transaction, so
+      // an id issued moments ago is released by hand — the same compensation
+      // createCompany does for a company id.
+      if (temp_icid_factory_id) {
+        try {
+          await axios.delete(
+            `${this.icidUrl}/factory/${temp_icid_factory_id}`,
+            { headers: { 'Content-Type': 'application/json' } },
+          );
+        } catch {
+          // Nothing more can be done here, and the caller's own error is the
+          // one worth reporting. The id is simply left unused.
+        }
+      }
       if (err instanceof HttpException) {
         throw err;
       } else if (err.response) {
