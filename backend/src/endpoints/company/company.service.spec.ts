@@ -51,6 +51,9 @@ const authorizedUser = {
 
 jest.mock('axios');
 
+/** Typed handle on the mocked module, for the ICID calls. */
+const mockedAxios = axios as jest.Mocked<typeof axios>;
+
 describe('CompanyService', () => {
   let service: CompanyService;
   let companyRepository: {
@@ -523,7 +526,108 @@ describe('CompanyService', () => {
         success: true,
         status: 201,
         message: 'Factory created successfully',
+        factory_id: 'urn:ifric:fac-1',
       });
+    });
+
+    it('mints an identifier when the caller sends only a factory_key', async () => {
+      companyRepository.find.mockResolvedValue([
+        { _id: 'owner-1', country: 'Germany' },
+      ]);
+      factoryRepository.find.mockResolvedValue([]);
+      factoryRepository.save.mockResolvedValue({});
+      mockedAxios.post.mockResolvedValue({
+        data: { status: '201', urn_id: 'urn:ifric:ifx-eur-loc-fac-minted' },
+      });
+
+      const result: any = await service.createFactory(
+        {
+          factory_key: 'factory-key-1',
+          owner_company_ifric_id: 'urn:ifric:owner-1',
+          location_name: 'Plant 1',
+        },
+        authorizedUser,
+      );
+
+      const [url, body] = mockedAxios.post.mock.calls.at(-1)!;
+      expect(url).toContain('/factory');
+      expect(body).toMatchObject({
+        owner_company_ifric_id: 'urn:ifric:owner-1',
+        factory_key: 'factory-key-1',
+        // Region derived from the owning company's country, as for a company.
+        region_code: 'EU',
+      });
+      expect(result.factory_id).toBe('urn:ifric:ifx-eur-loc-fac-minted');
+
+      // factory_key is an input to the identifier, never a stored column.
+      const saved = factoryRepository.create.mock.calls.at(-1)![0];
+      expect(saved).not.toHaveProperty('factory_key');
+      expect(saved).toMatchObject({
+        factory_id: 'urn:ifric:ifx-eur-loc-fac-minted',
+      });
+    });
+
+    it('refuses a request carrying neither a factory_id nor a factory_key', async () => {
+      mockedAxios.post.mockClear();
+      companyRepository.find.mockResolvedValue([
+        { _id: 'owner-1', country: 'Germany' },
+      ]);
+
+      await expect(
+        service.createFactory(
+          { owner_company_ifric_id: 'urn:ifric:owner-1' },
+          authorizedUser,
+        ),
+      ).rejects.toThrow(HttpException);
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+    });
+
+    it('releases a minted identifier when the database write fails', async () => {
+      companyRepository.find.mockResolvedValue([
+        { _id: 'owner-1', country: 'Germany' },
+      ]);
+      factoryRepository.find.mockResolvedValue([]);
+      mockedAxios.post.mockResolvedValue({
+        data: { status: '201', urn_id: 'urn:ifric:ifx-eur-loc-fac-minted' },
+      });
+      factoryRepository.save.mockRejectedValue(new Error('insert failed'));
+
+      await expect(
+        service.createFactory(
+          {
+            factory_key: 'factory-key-1',
+            owner_company_ifric_id: 'urn:ifric:owner-1',
+          },
+          authorizedUser,
+        ),
+      ).rejects.toThrow(HttpException);
+
+      // The mint cannot join the database transaction, so it is undone here
+      // or the identifier is orphaned in ICID forever.
+      expect(mockedAxios.delete).toHaveBeenCalledWith(
+        expect.stringContaining('/factory/urn:ifric:ifx-eur-loc-fac-minted'),
+        expect.anything(),
+      );
+    });
+
+    it('keeps an identifier the caller supplied, without minting', async () => {
+      mockedAxios.post.mockClear();
+      companyRepository.find.mockResolvedValue([
+        { _id: 'owner-1', country: 'Germany' },
+      ]);
+      factoryRepository.find.mockResolvedValue([]);
+      factoryRepository.save.mockResolvedValue({});
+
+      const result: any = await service.createFactory(
+        {
+          factory_id: 'urn:ngsi-ld:factories:2:001',
+          owner_company_ifric_id: 'urn:ifric:owner-1',
+        },
+        authorizedUser,
+      );
+
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+      expect(result.factory_id).toBe('urn:ngsi-ld:factories:2:001');
     });
   });
 

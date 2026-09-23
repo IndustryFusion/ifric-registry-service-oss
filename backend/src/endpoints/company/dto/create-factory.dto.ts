@@ -15,7 +15,19 @@
 //
 
 export interface CreateFactoryDto {
-  factory_id: string;
+  /**
+   * Optional since factory identifiers became centrally minted. Supplied, it
+   * is used as-is — that is how every factory registered before the mint
+   * existed, and those ids remain valid. Omitted, one is minted from
+   * factory_key.
+   */
+  factory_id?: string;
+  /**
+   * The caller's stable handle for this factory, used to derive the minted
+   * identifier. Required when factory_id is absent, and never stored: it is
+   * an input to the identifier, not a column.
+   */
+  factory_key?: string;
   owner_company_ifric_id: string;
   location_name?: string;
   address_1?: string;

@@ -77,6 +77,10 @@ export const envConstants = {
   icidServiceBackendUrl: process.env.ICID_SERVICE_BACKEND_URL,
   hederaKeySecret: process.env.HEDERA_KEY_SECRET,
   companyDefaultCode: process.env.COMPANY_DEFAULT_CODE,
+  // The URN code triple for a factory identifier, as ICID expects it:
+  // <dataspace>-<object type>-<object sub type>. Defaulted rather than
+  // required, so an existing deployment keeps working without new config.
+  factoryDefaultCode: process.env.FACTORY_DEFAULT_CODE || 'IFX-LOC-FAC',
   companyCreationApiKey: process.env.COMPANY_CREATION_API_KEY,
   certificatesEnabled: !!process.env.HEDERA_KEY_SECRET,
   dbHost: process.env.DB_HOST,
