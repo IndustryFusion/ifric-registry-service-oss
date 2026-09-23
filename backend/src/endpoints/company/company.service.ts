@@ -307,8 +307,11 @@ export class CompanyService {
       if (existing.length > 0) {
         throw new HttpException('Factory already exists', HttpStatus.CONFLICT);
       }
-      // factory_key is the mint's natural key, not a column on this table.
-      const { factory_key, ...row } = data;
+      // factory_key is an input to the identifier, not a column on this
+      // table. Removed from a copy rather than destructured away, which left
+      // a binding no one reads and failed lint.
+      const row = { ...data };
+      delete row.factory_key;
       await this.factoryRepository.save(this.factoryRepository.create(row));
       return {
         success: true,
